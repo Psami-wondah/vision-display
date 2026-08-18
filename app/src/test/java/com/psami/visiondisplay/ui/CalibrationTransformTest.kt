@@ -6,28 +6,44 @@ import org.junit.Test
 
 class CalibrationTransformTest {
     @Test
-    fun fullScale_hasNoTranslationBecauseThereIsNoUnusedDisplayArea() {
-        val transform = calculateCalibrationTransform(
-            width = 1920,
-            height = 1080,
+    fun fullScale_fillsRootBecauseThereIsNoUnusedDisplayArea() {
+        val layout = calculateCalibrationLayout(
+            rootWidth = 1920,
+            rootHeight = 1080,
             state = CalibrationState(compressionScale = 1f, offsetX = 1f, offsetY = -1f)
         )
 
-        assertEquals(1f, transform.scale, 0f)
-        assertEquals(0f, transform.translationX, 0f)
-        assertEquals(0f, transform.translationY, 0f)
+        assertEquals(1920, layout.width)
+        assertEquals(1080, layout.height)
+        assertEquals(0, layout.leftMargin)
+        assertEquals(0, layout.topMargin)
     }
 
     @Test
     fun compressedContent_movesToRequestedEdgesWithoutLeavingTheDisplay() {
-        val transform = calculateCalibrationTransform(
-            width = 1000,
-            height = 600,
+        val layout = calculateCalibrationLayout(
+            rootWidth = 1000,
+            rootHeight = 600,
             state = CalibrationState(compressionScale = 0.5f, offsetX = 1f, offsetY = -1f)
         )
 
-        assertEquals(0.5f, transform.scale, 0f)
-        assertEquals(250f, transform.translationX, 0f)
-        assertEquals(-150f, transform.translationY, 0f)
+        assertEquals(500, layout.width)
+        assertEquals(300, layout.height)
+        assertEquals(500, layout.leftMargin)
+        assertEquals(0, layout.topMargin)
+    }
+
+    @Test
+    fun compressedContent_centresWithinTheUnusedDisplayArea() {
+        val layout = calculateCalibrationLayout(
+            rootWidth = 1000,
+            rootHeight = 600,
+            state = CalibrationState(compressionScale = 0.5f, offsetX = 0f, offsetY = 0f)
+        )
+
+        assertEquals(500, layout.width)
+        assertEquals(300, layout.height)
+        assertEquals(250, layout.leftMargin)
+        assertEquals(150, layout.topMargin)
     }
 }

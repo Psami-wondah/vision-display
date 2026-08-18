@@ -14,6 +14,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -22,8 +23,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.psami.visiondisplay.data.CalibrationState
+import com.psami.visiondisplay.data.CameraMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -31,10 +34,13 @@ fun CalibrationControlPanel(
     state: CalibrationState,
     hasCameraPermission: Boolean,
     isExternalDisplayConnected: Boolean,
+    cameraMode: CameraMode,
+    cameraDiagnostics: String,
     runtimeError: String?,
     cameraPermissionActionLabel: String,
     onCameraPermissionAction: () -> Unit,
     onRetry: () -> Unit,
+    onCameraModeChange: (CameraMode) -> Unit,
     onStateChange: (CalibrationState) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -84,6 +90,31 @@ fun CalibrationControlPanel(
                             Text("Retry setup")
                         }
                     }
+                }
+            }
+
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Camera mode", style = MaterialTheme.typography.titleMedium)
+                    CameraMode.entries.forEach { mode ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(
+                                selected = cameraMode == mode,
+                                onClick = { onCameraModeChange(mode) }
+                            )
+                            Text(mode.displayLabel())
+                        }
+                    }
+
+                    Text("CameraX diagnostics", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        text = cameraDiagnostics,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace
+                    )
                 }
             }
 
@@ -150,4 +181,10 @@ fun CalibrationControlPanel(
             }
         }
     }
+}
+
+private fun CameraMode.displayLabel(): String = when (this) {
+    CameraMode.AUTO -> "Auto"
+    CameraMode.DEFAULT_BACK -> "Default Back"
+    CameraMode.WIDEST_BACK -> "Widest Back"
 }

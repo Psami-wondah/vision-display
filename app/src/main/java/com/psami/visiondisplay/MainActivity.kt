@@ -21,6 +21,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import com.psami.visiondisplay.data.CalibrationState
 import com.psami.visiondisplay.data.CalibrationStore
+import com.psami.visiondisplay.data.CameraMode
 import com.psami.visiondisplay.ui.CameraXController
 import com.psami.visiondisplay.ui.GlassesPresentationDialog
 import com.psami.visiondisplay.ui.GlassesRenderTarget
@@ -39,6 +40,8 @@ class MainActivity : ComponentActivity() {
     private var hasCameraPermission by mutableStateOf(false)
     private var permissionRequestAttempted by mutableStateOf(false)
     private var isExternalDisplayConnected by mutableStateOf(false)
+    private var selectedCameraMode by mutableStateOf(CameraMode.AUTO)
+    private var cameraDiagnostics by mutableStateOf("CameraX diagnostics are loading…")
     private var runtimeError by mutableStateOf<String?>(null)
 
     private val cameraPermissionLauncher = registerForActivityResult(
@@ -51,6 +54,7 @@ class MainActivity : ComponentActivity() {
             synchronizeCamera()
         } else {
             cameraController.stop()
+            cameraController.refreshDiagnostics(selectedCameraMode)
         }
     }
 
@@ -65,7 +69,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         displayManager = getSystemService(DisplayManager::class.java)
-        cameraController = CameraXController(applicationContext)
+        cameraController = CameraXController(applicationContext) { diagnostics ->
+            cameraDiagnostics = diagnostics
+        }
+        cameraController.refreshDiagnostics(selectedCameraMode)
         latestCalibrationState = CalibrationStore.load(this)
         permissionRequestAttempted = savedInstanceState?.getBoolean(KEY_PERMISSION_ATTEMPTED) == true
         hasCameraPermission = cameraPermissionIsGranted()
@@ -87,6 +94,8 @@ class MainActivity : ComponentActivity() {
                     state = calibrationState,
                     hasCameraPermission = hasCameraPermission,
                     isExternalDisplayConnected = isExternalDisplayConnected,
+                    cameraMode = selectedCameraMode,
+                    cameraDiagnostics = cameraDiagnostics,
                     runtimeError = runtimeError,
                     cameraPermissionActionLabel = if (shouldOpenSettings) {
                         "Open app settings"
@@ -101,6 +110,13 @@ class MainActivity : ComponentActivity() {
                         cameraController.stop()
                         synchronizePresentation()
                         synchronizeCamera()
+                    },
+                    onCameraModeChange = { cameraMode ->
+                        if (cameraMode != selectedCameraMode) {
+                            selectedCameraMode = cameraMode
+                            runtimeError = null
+                            synchronizeCamera()
+                        }
                     },
                     onStateChange = { requestedState ->
                         val newState = requestedState.normalized()
@@ -194,6 +210,7 @@ class MainActivity : ComponentActivity() {
                 renderTarget = null
                 isExternalDisplayConnected = false
                 cameraController.stop()
+                cameraController.refreshDiagnostics(selectedCameraMode)
             }
         }
         glassesPresentation = presentation
@@ -218,6 +235,7 @@ class MainActivity : ComponentActivity() {
         renderTarget = null
         isExternalDisplayConnected = false
         cameraController.stop()
+        cameraController.refreshDiagnostics(selectedCameraMode)
 
         presentation?.setOnDismissListener(null)
         if (presentation?.isShowing == true) {
@@ -239,10 +257,12 @@ class MainActivity : ComponentActivity() {
                 lifecycleOwner = this,
                 target = target,
                 edgeEnhancementEnabled = latestCalibrationState.isEdgeEnhancementEnabled,
+                cameraMode = selectedCameraMode,
                 onError = { message -> runtimeError = message }
             )
         } else {
             cameraController.stop()
+            cameraController.refreshDiagnostics(selectedCameraMode)
         }
     }
 
