@@ -3,10 +3,16 @@ package com.psami.visiondisplay.ui
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.os.Build
 import android.util.Log
 import android.util.Size
 import android.view.Surface
-import androidx.camera.core.Camera
+import androidx.annotation.OptIn
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import androidx.camera.core.CameraFilter
 import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -18,137 +24,345 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
-import com.psami.visiondisplay.data.CameraMode
+import com.psami.visiondisplay.data.CameraOption
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.atan
 import kotlin.math.ceil
-
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.TotalCaptureResult
+import android.hardware.camera2.CaptureResult
+import androidx.camera.camera2.interop.Camera2Interop
+import android.view.OrientationEventListener
 class CameraXController(
     context: Context,
-    private val onCameraDiagnosticsChanged: (String) -> Unit
+    private val onCameraDiagnosticsChanged: (String) -> Unit,
+    private val onCameraOptionsChanged: (List<CameraOption>) -> Unit
 ) : AutoCloseable {
+
+    private data class LogicalCameraDetails(
+        val cameraId: String,
+        val characteristics: CameraCharacteristics
+    )
+
+    private data class CameraOptics(
+        val focalLengthMm: Float,
+        val sensorWidthMm: Float,
+        val horizontalFovRadians: Double
+    ) {
+        val horizontalFovDegrees: Double
+            get() = Math.toDegrees(horizontalFovRadians)
+    }
+
     private val appContext = context.applicationContext
-    private val mainExecutor = ContextCompat.getMainExecutor(appContext)
-    private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
-    private val cameraProviderFuture = ProcessCameraProvider.getInstance(appContext)
-    private val edgeEnhancementEnabled = AtomicBoolean(false)
+
+    private val cameraManager =
+        appContext.getSystemService(CameraManager::class.java)
+
+    private val mainExecutor =
+        ContextCompat.getMainExecutor(appContext)
+
+    private val analysisExecutor: ExecutorService =
+        Executors.newSingleThreadExecutor()
+
+    private var lastActivePhysicalCameraId: String? = null
+
+    private val cameraProviderFuture =
+        ProcessCameraProvider.getInstance(appContext)
+
+    private val edgeEnhancementEnabled =
+        AtomicBoolean(false)
 
     private var bindingGeneration = 0
     private var diagnosticsGeneration = 0
+
     private var currentTarget: GlassesRenderTarget? = null
     private var currentLifecycleOwner: LifecycleOwner? = null
-    private var currentCameraMode: CameraMode? = null
+    private var currentSelectedCameraId: String? = null
+
     private var currentPreview: Preview? = null
     private var currentAnalysis: ImageAnalysis? = null
+
     private var lastDiagnostics: String? = null
+
+    private var currentDiagnosticsBase =
+        ""
+    private var lastCameraOptions: List<CameraOption> = emptyList()
+
     private var isBinding = false
     private var isBound = false
     private var isClosed = false
 
+
+
+
+
+
+    @OptIn(ExperimentalCamera2Interop::class)
     fun start(
         lifecycleOwner: LifecycleOwner,
         target: GlassesRenderTarget,
         edgeEnhancementEnabled: Boolean,
-        cameraMode: CameraMode,
+        selectedCameraId: String?,
         onError: (String) -> Unit
     ) {
-        check(!isClosed) { "CameraXController has already been closed" }
+
+        check(!isClosed) {
+            "CameraXController has already been closed"
+        }
+
+
         setEdgeEnhancementEnabled(edgeEnhancementEnabled)
 
-        val isSameTarget = currentTarget?.previewView === target.previewView
+        val isSameTarget =
+            currentTarget?.previewView === target.previewView
+
         if (
             isSameTarget &&
             currentLifecycleOwner === lifecycleOwner &&
-            currentCameraMode == cameraMode &&
+            currentSelectedCameraId == selectedCameraId &&
             (isBinding || isBound)
         ) {
-            updateTargetRotation(target)
+            updateTargetRotation()
             return
         }
 
         stop()
+        orientationEventListener.enable()
+
         currentTarget = target
         currentLifecycleOwner = lifecycleOwner
-        currentCameraMode = cameraMode
-        target.edgeOverlayView.setEdgeEnhancementEnabled(edgeEnhancementEnabled)
+        currentSelectedCameraId = selectedCameraId
+
+        target.edgeOverlayView.setEdgeEnhancementEnabled(
+            edgeEnhancementEnabled
+        )
+
         isBinding = true
+
         val requestedGeneration = ++bindingGeneration
         val requestedDiagnosticsGeneration = ++diagnosticsGeneration
 
         cameraProviderFuture.addListener({
-            if (isClosed || requestedGeneration != bindingGeneration) return@addListener
-            var backCameras = emptyList<BackCameraDetails>()
+
+            if (
+                isClosed ||
+                requestedGeneration != bindingGeneration
+            ) {
+                return@addListener
+            }
 
             try {
-                val cameraProvider = cameraProviderFuture.get()
-                backCameras = collectBackCameraDetails(cameraProvider)
-                val requestedChoice = chooseCamera(cameraMode, backCameras)
-                val resolutionSelector = ResolutionSelector.Builder()
-                    .setAspectRatioStrategy(
-                        AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY
+                val cameraProvider =
+                    cameraProviderFuture.get()
+
+                val selectableCameras =
+                    discoverSelectableBackCameras(cameraProvider)
+
+                publishCameraOptions(selectableCameras)
+
+                val requestedChoice =
+                    chooseCamera(
+                        selectedCameraId = selectedCameraId,
+                        cameras = selectableCameras
                     )
-                    .setResolutionStrategy(
-                        ResolutionStrategy(
-                            Size(640, 360),
-                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER
+
+                val previewResolutionSelector =
+                    ResolutionSelector.Builder()
+                        .setAspectRatioStrategy(
+                            AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY
                         )
-                    )
-                    .build()
-                val targetRotation = target.previewView.display?.rotation ?: Surface.ROTATION_0
-                val preview = Preview.Builder()
-                    .setResolutionSelector(resolutionSelector)
-                    .setTargetRotation(targetRotation)
-                    .build()
-                    .also { it.surfaceProvider = target.previewView.surfaceProvider }
-                val analysis = ImageAnalysis.Builder()
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .setResolutionSelector(resolutionSelector)
-                    .setTargetRotation(targetRotation)
-                    .build()
-                    .also {
-                        it.setAnalyzer(
-                            analysisExecutor,
-                            EdgeAnalyzer(
-                                overlayView = target.edgeOverlayView,
-                                enabled = this.edgeEnhancementEnabled,
-                                mainExecutor = mainExecutor,
-                                onError = { message ->
-                                    if (!isClosed && requestedGeneration == bindingGeneration) {
-                                        onError(message)
-                                    }
-                                }
+                        .build()
+
+                val analysisResolutionSelector =
+                    ResolutionSelector.Builder()
+                        .setAspectRatioStrategy(
+                            AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY
+                        )
+                        .setResolutionStrategy(
+                            ResolutionStrategy(
+                                Size(640, 360),
+                                ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER
                             )
                         )
+                        .build()
+
+                val targetRotation =
+                    currentDeviceRotation
+
+                val previewBuilder =
+                    Preview.Builder()
+                        .setResolutionSelector(
+                            previewResolutionSelector
+                        )
+                        .setTargetRotation(
+                            currentDeviceRotation
+                        )
+
+                requestedChoice
+                    .physicalCameraId
+                    ?.let { physicalCameraId ->
+
+                        Camera2Interop.Extender(
+                            previewBuilder
+                        )
+                            .setPhysicalCameraId(
+                                physicalCameraId
+                            )
                     }
 
+                Camera2Interop.Extender(
+                    previewBuilder
+                )
+                    .setSessionCaptureCallback(
+                        object :
+                            CameraCaptureSession.CaptureCallback() {
+
+                            override fun onCaptureCompleted(
+                                session:
+                                CameraCaptureSession,
+
+                                request:
+                                CaptureRequest,
+
+                                result:
+                                TotalCaptureResult
+                            ) {
+
+                                val activePhysicalId =
+                                    result.get(
+                                        CaptureResult
+                                            .LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID
+                                    )
+
+                                if (
+                                    activePhysicalId != null &&
+                                    activePhysicalId !=
+                                    lastActivePhysicalCameraId
+                                ) {
+                                    lastActivePhysicalCameraId =
+                                        activePhysicalId
+                                    mainExecutor.execute {
+                                        publishCombinedDiagnostics()
+                                    }
+                                    Log.d(
+                                        TAG,
+                                        "ACTIVE PHYSICAL CAMERA: " +
+                                                activePhysicalId
+                                    )
+                                }
+                            }
+                        }
+                    )
+
+                val preview =
+                    previewBuilder
+                        .build()
+                        .also {
+                            it.surfaceProvider =
+                                target.previewView.surfaceProvider
+                        }
+
+
+                val analysisBuilder =
+                    ImageAnalysis.Builder()
+                        .setBackpressureStrategy(
+                            ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+                        )
+                        .setResolutionSelector(
+                            analysisResolutionSelector
+                        )
+                        .setTargetRotation(
+                            currentDeviceRotation
+                        )
+
+
+                requestedChoice
+                    .physicalCameraId
+                    ?.let { physicalCameraId ->
+
+                        Camera2Interop.Extender(
+                            analysisBuilder
+                        )
+                            .setPhysicalCameraId(
+                                physicalCameraId
+                            )
+                    }
+
+                val analysis =
+                    analysisBuilder
+                        .build()
+                        .also {
+                            it.setAnalyzer(
+                                analysisExecutor,
+                                EdgeAnalyzer(
+                                    overlayView =
+                                        target.edgeOverlayView,
+
+                                    enabled =
+                                        this.edgeEnhancementEnabled,
+
+                                    mainExecutor =
+                                        mainExecutor,
+
+                                    onError = { message ->
+
+                                        if (
+                                            !isClosed &&
+                                            requestedGeneration ==
+                                            bindingGeneration
+                                        ) {
+                                            onError(message)
+                                        }
+                                    }
+                                )
+                            )
+                        }
                 var finalChoice = requestedChoice
-                var fellBackToDefault = requestedChoice.fellBackToDefault
-                var fallbackReason = requestedChoice.fallbackReason
-                var boundCamera: Camera
+                var fellBackToDefault = false
+                var fallbackReason: String? = null
 
                 try {
                     cameraProvider.unbindAll()
-                    boundCamera = cameraProvider.bindToLifecycle(
+
+                    cameraProvider.bindToLifecycle(
                         lifecycleOwner,
                         requestedChoice.selector,
                         preview,
                         analysis
                     )
-                } catch (selectionException: Exception) {
-                    if (requestedChoice.usesDefaultBackSelector) throw selectionException
 
-                    finalChoice = defaultBackChoice(
-                        backCameras = backCameras,
-                        selectionReason = "Preferred selector could not be bound; using default back",
-                        fellBackToDefault = true,
-                        fallbackReason = selectionException.diagnosticMessage()
-                    )
+                } catch (selectionException: Exception) {
+
+                    /*
+                     * Some manufacturers expose a physical camera
+                     * but reject binding it directly.
+                     *
+                     * In that situation we fall back rather than
+                     * crashing the entire glasses feed.
+                     */
+
+                    if (requestedChoice.usesDefaultBackSelector) {
+                        throw selectionException
+                    }
+
                     fellBackToDefault = true
-                    fallbackReason = finalChoice.fallbackReason
+
+                    fallbackReason =
+                        selectionException.diagnosticMessage()
+
+                    finalChoice =
+                        defaultBackChoice(
+                            reason =
+                                "Requested camera could not be bound"
+                        )
+
                     cameraProvider.unbindAll()
-                    boundCamera = cameraProvider.bindToLifecycle(
+
+                    cameraProvider.bindToLifecycle(
                         lifecycleOwner,
                         finalChoice.selector,
                         preview,
@@ -156,7 +370,9 @@ class CameraXController(
                     )
                 }
 
-                if (requestedGeneration != bindingGeneration) {
+                if (
+                    requestedGeneration != bindingGeneration
+                ) {
                     cameraProvider.unbindAll()
                     analysis.clearAnalyzer()
                     return@addListener
@@ -164,419 +380,1253 @@ class CameraXController(
 
                 currentPreview = preview
                 currentAnalysis = analysis
+
                 isBinding = false
                 isBound = true
 
-                if (requestedDiagnosticsGeneration == diagnosticsGeneration) {
+                if (
+                    requestedDiagnosticsGeneration ==
+                    diagnosticsGeneration
+                ) {
                     publishDiagnostics(
                         buildDiagnostics(
-                            cameraMode = cameraMode,
-                            backCameras = collectBackCameraDetails(cameraProvider),
+                            cameras = selectableCameras,
                             requestedChoice = requestedChoice,
-                            finalSelector = finalChoice.selectorDescription,
-                            fellBackToDefault = fellBackToDefault,
-                            fallbackReason = fallbackReason,
-                            bindingStatus = "Bound (${describeBoundCamera(boundCamera, backCameras)})"
+                            finalChoice = finalChoice,
+                            fellBackToDefault =
+                                fellBackToDefault,
+                            fallbackReason =
+                                fallbackReason,
+                            bindingStatus = "Bound"
                         )
                     )
                 }
+
             } catch (exception: Exception) {
+
                 isBinding = false
                 isBound = false
+
                 currentPreview = null
+
                 currentAnalysis?.clearAnalyzer()
                 currentAnalysis = null
-                if (requestedDiagnosticsGeneration == diagnosticsGeneration) {
+
+                if (
+                    requestedDiagnosticsGeneration ==
+                    diagnosticsGeneration
+                ) {
                     publishDiagnostics(
-                        buildFailureDiagnostics(
-                            cameraMode = cameraMode,
-                            backCameras = backCameras,
-                            message = exception.diagnosticMessage()
-                        )
+                        "Camera binding failed:\n" +
+                                exception.diagnosticMessage()
                     )
                 }
+
                 onError(
                     exception.cause?.message
                         ?: exception.message
                         ?: "Unable to start the camera"
                 )
             }
+
         }, mainExecutor)
     }
 
-    fun refreshDiagnostics(cameraMode: CameraMode) {
+
+    private var currentDeviceRotation =
+        Surface.ROTATION_0
+
+    private val orientationEventListener =
+        object : OrientationEventListener(appContext) {
+
+            override fun onOrientationChanged(
+                orientation: Int
+            ) {
+                if (
+                    orientation ==
+                    ORIENTATION_UNKNOWN
+                ) {
+                    return
+                }
+
+                val rotation =
+                    when (orientation) {
+                        in 45..134 ->
+                            Surface.ROTATION_270
+
+                        in 135..224 ->
+                            Surface.ROTATION_180
+
+                        in 225..314 ->
+                            Surface.ROTATION_90
+
+                        else ->
+                            Surface.ROTATION_0
+                    }
+
+                if (
+                    rotation ==
+                    currentDeviceRotation
+                ) {
+                    return
+                }
+
+                currentDeviceRotation =
+                    rotation
+
+                currentPreview?.targetRotation =
+                    rotation
+
+                currentAnalysis?.targetRotation =
+                    rotation
+            }
+        }
+
+    /**
+     * Discover the selectable camera lenses without starting
+     * the camera.
+     */
+    fun refreshCameraOptions() {
         if (isClosed) return
-        val requestedDiagnosticsGeneration = ++diagnosticsGeneration
+
         cameraProviderFuture.addListener({
-            if (isClosed || requestedDiagnosticsGeneration != diagnosticsGeneration) {
+
+            if (isClosed) return@addListener
+
+            try {
+                val cameraProvider =
+                    cameraProviderFuture.get()
+
+                publishCameraOptions(
+                    discoverSelectableBackCameras(
+                        cameraProvider
+                    )
+                )
+
+            } catch (exception: Exception) {
+
+                Log.e(
+                    TAG,
+                    "Unable to discover cameras",
+                    exception
+                )
+
+                publishCameraOptions(emptyList())
+            }
+
+        }, mainExecutor)
+    }
+
+    fun refreshDiagnostics(
+        selectedCameraId: String?
+    ) {
+        if (isClosed) return
+
+        val requestedGeneration =
+            ++diagnosticsGeneration
+
+        cameraProviderFuture.addListener({
+
+            if (
+                isClosed ||
+                requestedGeneration != diagnosticsGeneration
+            ) {
                 return@addListener
             }
 
             try {
-                val cameraProvider = cameraProviderFuture.get()
-                val backCameras = collectBackCameraDetails(cameraProvider)
-                val requestedChoice = chooseCamera(cameraMode, backCameras)
+                val cameraProvider =
+                    cameraProviderFuture.get()
+
+                val cameras =
+                    discoverSelectableBackCameras(
+                        cameraProvider
+                    )
+
+                publishCameraOptions(cameras)
+
+                val choice =
+                    chooseCamera(
+                        selectedCameraId,
+                        cameras
+                    )
+
                 publishDiagnostics(
                     buildDiagnostics(
-                        cameraMode = cameraMode,
-                        backCameras = backCameras,
-                        requestedChoice = requestedChoice,
-                        finalSelector = "Not bound; planned ${requestedChoice.selectorDescription}",
-                        fellBackToDefault = requestedChoice.fellBackToDefault,
-                        fallbackReason = requestedChoice.fallbackReason,
-                        bindingStatus = "Waiting for camera permission and an external display"
+                        cameras = cameras,
+                        requestedChoice = choice,
+                        finalChoice = choice,
+                        fellBackToDefault = false,
+                        fallbackReason = null,
+                        bindingStatus =
+                            "Waiting for camera permission " +
+                                    "and external display"
                     )
                 )
+
             } catch (exception: Exception) {
+
                 publishDiagnostics(
-                    buildFailureDiagnostics(
-                        cameraMode = cameraMode,
-                        backCameras = emptyList(),
-                        message = exception.diagnosticMessage()
-                    )
+                    "Camera discovery failed:\n" +
+                            exception.diagnosticMessage()
                 )
             }
+
         }, mainExecutor)
     }
 
-    fun setEdgeEnhancementEnabled(enabled: Boolean) {
+    fun setEdgeEnhancementEnabled(
+        enabled: Boolean
+    ) {
         edgeEnhancementEnabled.set(enabled)
-        currentTarget?.edgeOverlayView?.setEdgeEnhancementEnabled(enabled)
+
+        currentTarget
+            ?.edgeOverlayView
+            ?.setEdgeEnhancementEnabled(enabled)
     }
 
     fun stop() {
+        orientationEventListener.disable()
         bindingGeneration++
         diagnosticsGeneration++
+
         isBinding = false
         isBound = false
+
         currentPreview = null
+
         currentAnalysis?.clearAnalyzer()
         currentAnalysis = null
-        currentTarget?.edgeOverlayView?.clear()
+
+        currentTarget
+            ?.edgeOverlayView
+            ?.clear()
+
         currentTarget = null
         currentLifecycleOwner = null
-        currentCameraMode = null
+        currentSelectedCameraId = null
+        lastActivePhysicalCameraId =
+            null
 
         if (cameraProviderFuture.isDone) {
             try {
-                cameraProviderFuture.get().unbindAll()
+                cameraProviderFuture
+                    .get()
+                    .unbindAll()
+
             } catch (_: Exception) {
-                // A failed provider has no bound use cases to release.
+                // Nothing to release.
             }
         }
     }
 
     override fun close() {
         if (isClosed) return
+
         stop()
+
         isClosed = true
+
         analysisExecutor.shutdownNow()
     }
 
-    private fun collectBackCameraDetails(
+    /**
+     * Finds the lenses CameraX exposes to us.
+     *
+     * We first look for physical cameras belonging to logical
+     * multi-camera devices. This is where ultra-wide / main /
+     * telephoto sensors often live.
+     *
+     * If Android exposes no physical cameras, we fall back to
+     * CameraX's normal top-level camera list.
+     */
+    private fun discoverSelectableBackCameras(
         cameraProvider: ProcessCameraProvider
-    ): List<BackCameraDetails> {
-        var backCameraIndex = 0
-        return cameraProvider.availableCameraInfos.mapIndexedNotNull { availableIndex, cameraInfo ->
-            val isBackCamera = runCatching {
-                cameraInfo.lensFacing == CameraSelector.LENS_FACING_BACK
-            }.getOrDefault(false)
-            if (!isBackCamera) return@mapIndexedNotNull null
+    ): List<SelectableCamera> {
 
-            val zoomState = runCatching { cameraInfo.zoomState.value }.getOrNull()
-            BackCameraDetails(
-                backCameraIndex = backCameraIndex++,
-                availableCameraIndex = availableIndex,
-                cameraInfo = cameraInfo,
-                intrinsicZoomRatio = runCatching { cameraInfo.intrinsicZoomRatio }
-                    .getOrNull()
-                    ?.takeIf { it.isFinite() && it > 0f },
-                minZoomRatio = zoomState?.minZoomRatio,
-                maxZoomRatio = zoomState?.maxZoomRatio
-            )
-        }
-    }
+        /*
+         * Camera2 is now our source of truth for camera topology.
+         */
+        val logicalBackCameras =
+            cameraManager.cameraIdList
+                .mapNotNull { cameraId ->
 
-    private fun chooseCamera(
-        cameraMode: CameraMode,
-        backCameras: List<BackCameraDetails>
-    ): CameraChoice {
-        val widestCamera = backCameras
-            .filter { it.intrinsicZoomRatio != null }
-            .minByOrNull { it.intrinsicZoomRatio!! }
+                    val characteristics =
+                        runCatching {
+                            cameraManager
+                                .getCameraCharacteristics(
+                                    cameraId
+                                )
+                        }.getOrNull()
+                            ?: return@mapNotNull null
 
-        return when (cameraMode) {
-            CameraMode.DEFAULT_BACK -> defaultBackChoice(
-                backCameras = backCameras,
-                selectionReason = "DEFAULT_BACK always requests CameraSelector.DEFAULT_BACK_CAMERA"
-            )
+                    val facing =
+                        characteristics.get(
+                            CameraCharacteristics.LENS_FACING
+                        )
 
-            CameraMode.WIDEST_BACK -> {
-                if (widestCamera == null) {
-                    defaultBackChoice(
-                        backCameras = backCameras,
-                        selectionReason = "WIDEST_BACK found no usable intrinsic zoom data",
-                        fellBackToDefault = true,
-                        fallbackReason = "No back camera exposed a usable intrinsicZoomRatio"
-                    )
-                } else {
-                    exactCameraChoice(
-                        camera = widestCamera,
-                        selectionReason = "WIDEST_BACK chose the lowest intrinsicZoomRatio"
+                    if (
+                        facing !=
+                        CameraCharacteristics.LENS_FACING_BACK
+                    ) {
+                        return@mapNotNull null
+                    }
+
+                    LogicalCameraDetails(
+                        cameraId = cameraId,
+                        characteristics =
+                            characteristics
                     )
                 }
-            }
 
-            CameraMode.AUTO -> {
-                if (widestCamera?.intrinsicZoomRatio?.let { it < ULTRA_WIDE_THRESHOLD } == true) {
-                    exactCameraChoice(
-                        camera = widestCamera,
-                        selectionReason = "AUTO found intrinsicZoomRatio < 1.00"
-                    )
-                } else {
-                    defaultBackChoice(
-                        backCameras = backCameras,
-                        selectionReason = "AUTO found no intrinsicZoomRatio < 1.00"
+        /*
+         * Prefer a logical multi-camera with the largest number
+         * of underlying lenses.
+         *
+         * On a typical phone this should be the rear camera
+         * grouping containing ultra-wide/main/telephoto.
+         */
+        val logicalMultiCamera =
+            logicalBackCameras
+                .filter { logical ->
+
+                    if (
+                        Build.VERSION.SDK_INT <
+                        Build.VERSION_CODES.P
+                    ) {
+                        false
+                    } else {
+                        logical.characteristics
+                            .physicalCameraIds
+                            .isNotEmpty()
+                    }
+                }
+                .maxByOrNull { logical ->
+
+                    if (
+                        Build.VERSION.SDK_INT >=
+                        Build.VERSION_CODES.P
+                    ) {
+                        logical.characteristics
+                            .physicalCameraIds
+                            .size
+                    } else {
+                        0
+                    }
+                }
+
+        if (
+            logicalMultiCamera != null &&
+            Build.VERSION.SDK_INT >=
+            Build.VERSION_CODES.P
+        ) {
+            val physicalIds =
+                logicalMultiCamera
+                    .characteristics
+                    .physicalCameraIds
+
+            /*
+             * The logical camera characteristics normally describe
+             * Android's default active physical camera.
+             *
+             * Use those optics as our 1.0x reference.
+             */
+            val logicalReferenceOptics =
+                readCameraOptics(
+                    logicalMultiCamera.cameraId
+                )
+
+            val discovered =
+                physicalIds.mapNotNull { physicalId ->
+
+                    val optics =
+                        readCameraOptics(
+                            physicalId
+                        )
+
+                    val relativeZoom =
+                        calculateRelativeZoom(
+                            reference =
+                                logicalReferenceOptics,
+                            camera = optics
+                        )
+
+                    val option =
+                        CameraOption(
+                            id =
+                                "${logicalMultiCamera.cameraId}:$physicalId",
+
+                            logicalCameraId =
+                                logicalMultiCamera.cameraId,
+
+                            physicalCameraId =
+                                physicalId,
+
+                            label =
+                                cameraLabel(
+                                    relativeZoom
+                                ),
+
+                            relativeZoomRatio =
+                                relativeZoom,
+
+                            focalLengthMm =
+                                optics?.focalLengthMm,
+
+                            sensorWidthMm =
+                                optics?.sensorWidthMm,
+
+                            horizontalFovDegrees =
+                                optics?.horizontalFovDegrees,
+
+                            isPhysicalCamera =
+                                true
+                        )
+
+                    SelectableCamera(
+                        option = option,
+
+                        selector =
+                            buildLogicalCameraSelector(
+                                logicalCameraId =
+                                    logicalMultiCamera.cameraId
+                            ),
+
+                        physicalCameraId =
+                            physicalId
                     )
                 }
+
+            if (discovered.isNotEmpty()) {
+
+                /*
+                 * Widest -> narrowest.
+                 */
+                return discovered
+                    .sortedBy {
+                        it.option.relativeZoomRatio
+                    }
+                    .map { camera ->
+
+                        camera.copy(
+                            option =
+                                camera.option.copy(
+                                    label =
+                                        classifiedCameraLabel(
+                                            camera.option
+                                                .relativeZoomRatio
+                                        )
+                                )
+                        )
+                    }
             }
         }
-    }
 
-    private fun exactCameraChoice(
-        camera: BackCameraDetails,
-        selectionReason: String
-    ): CameraChoice = try {
-        CameraChoice(
-            selector = camera.cameraInfo.cameraSelector,
-            selectorDescription = "CameraInfo selector for ${camera.shortDescription()}",
-            selectionReason = selectionReason,
-            usesDefaultBackSelector = false
+        /*
+         * Fallback for phones that don't expose a logical
+         * multi-camera grouping.
+         *
+         * Here we enumerate standalone Camera2 rear devices.
+         */
+        return discoverStandaloneBackCameras(
+            cameraProvider =
+                cameraProvider,
+            logicalBackCameras =
+                logicalBackCameras
         )
-    } catch (exception: Exception) {
-        defaultBackChoice(
-            backCameras = listOf(camera),
-            selectionReason = "$selectionReason, but its CameraInfo selector was unavailable",
-            fellBackToDefault = true,
-            fallbackReason = exception.diagnosticMessage()
+    }
+
+    @OptIn(
+        markerClass = [
+            ExperimentalCamera2Interop::class
+        ]
+    )
+    private fun buildLogicalCameraSelector(
+        logicalCameraId: String
+    ): CameraSelector {
+
+        val logicalCameraFilter =
+            CameraFilter { cameraInfos ->
+
+                cameraInfos.filter { cameraInfo ->
+
+                    runCatching {
+                        Camera2CameraInfo
+                            .from(cameraInfo)
+                            .cameraId ==
+                                logicalCameraId
+                    }.getOrDefault(false)
+                }
+            }
+
+        return CameraSelector.Builder()
+            .requireLensFacing(
+                CameraSelector.LENS_FACING_BACK
+            )
+            .addCameraFilter(
+                logicalCameraFilter
+            )
+            .build()
+    }
+    @OptIn(
+        markerClass = [
+            ExperimentalCamera2Interop::class
+        ]
+    )
+    private fun discoverStandaloneBackCameras(
+        cameraProvider: ProcessCameraProvider,
+        logicalBackCameras:
+        List<LogicalCameraDetails>
+    ): List<SelectableCamera> {
+
+        if (logicalBackCameras.isEmpty()) {
+            return emptyList()
+        }
+
+        val referenceCamera =
+            logicalBackCameras.first()
+
+        val referenceOptics =
+            readCameraOptics(
+                referenceCamera.cameraId
+            )
+
+        return logicalBackCameras
+            .map { camera ->
+
+                val optics =
+                    readCameraOptics(
+                        camera.cameraId
+                    )
+
+                val ratio =
+                    calculateRelativeZoom(
+                        reference =
+                            referenceOptics,
+                        camera =
+                            optics
+                    )
+
+                val cameraFilter =
+                    CameraFilter { cameraInfos ->
+
+                        cameraInfos.filter { cameraInfo ->
+
+                            runCatching {
+                                Camera2CameraInfo
+                                    .from(cameraInfo)
+                                    .cameraId ==
+                                        camera.cameraId
+                            }.getOrDefault(false)
+                        }
+                    }
+
+                val selector =
+                    CameraSelector.Builder()
+                        .requireLensFacing(
+                            CameraSelector
+                                .LENS_FACING_BACK
+                        )
+                        .addCameraFilter(
+                            cameraFilter
+                        )
+                        .build()
+
+                SelectableCamera(
+                    option =
+                        CameraOption(
+                            id =
+                                "camera:${camera.cameraId}",
+
+                            logicalCameraId =
+                                camera.cameraId,
+
+                            physicalCameraId =
+                                null,
+
+                            label =
+                                cameraLabel(ratio),
+
+                            relativeZoomRatio =
+                                ratio,
+
+                            focalLengthMm =
+                                optics?.focalLengthMm,
+
+                            sensorWidthMm =
+                                optics?.sensorWidthMm,
+
+                            horizontalFovDegrees =
+                                optics
+                                    ?.horizontalFovDegrees,
+
+                            isPhysicalCamera =
+                                false
+                        ),
+
+                    selector =
+                        selector,
+                    physicalCameraId = ""
+                )
+            }
+            .sortedBy {
+                it.option.relativeZoomRatio
+            }
+    }
+
+    private fun calculateRelativeZoom(
+        reference: CameraOptics?,
+        camera: CameraOptics?
+    ): Float {
+        if (reference == null || camera == null) {
+            return 1f
+        }
+
+        /*
+         * Compare focal length relative to sensor width.
+         *
+         * focalLength / sensorWidth is effectively the
+         * horizontal optical magnification.
+         */
+        val referenceScale =
+            reference.focalLengthMm /
+                    reference.sensorWidthMm
+
+        val cameraScale =
+            camera.focalLengthMm /
+                    camera.sensorWidthMm
+
+        if (
+            referenceScale <= 0f ||
+            cameraScale <= 0f
+        ) {
+            return 1f
+        }
+
+        return (
+                cameraScale /
+                        referenceScale
+                )
+            .takeIf {
+                it.isFinite() && it > 0f
+            }
+            ?: 1f
+    }
+
+
+    private fun readCameraOptics(
+        cameraId: String
+    ): CameraOptics? {
+        return runCatching {
+            val characteristics =
+                cameraManager.getCameraCharacteristics(cameraId)
+
+            val focalLength =
+                characteristics
+                    .get(
+                        CameraCharacteristics
+                            .LENS_INFO_AVAILABLE_FOCAL_LENGTHS
+                    )
+                    ?.firstOrNull()
+                    ?.takeIf {
+                        it.isFinite() && it > 0f
+                    }
+                    ?: return@runCatching null
+
+            val physicalSize =
+                characteristics.get(
+                    CameraCharacteristics
+                        .SENSOR_INFO_PHYSICAL_SIZE
+                )
+                    ?: return@runCatching null
+
+            val sensorWidth =
+                physicalSize.width
+                    .takeIf {
+                        it.isFinite() && it > 0f
+                    }
+                    ?: return@runCatching null
+
+            val horizontalFov =
+                2.0 * atan(
+                    sensorWidth.toDouble() /
+                            (2.0 * focalLength.toDouble())
+                )
+
+            CameraOptics(
+                focalLengthMm = focalLength,
+                sensorWidthMm = sensorWidth,
+                horizontalFovRadians = horizontalFov
+            )
+        }.getOrNull()
+    }
+
+    @OptIn(ExperimentalCamera2Interop::class)
+    private fun physicalCameraId(
+        cameraInfo: CameraInfo
+    ): String? {
+
+        /*
+         * CameraX physical CameraInfo normally carries a selector
+         * containing the physical camera ID.
+         */
+        val selectorId =
+            runCatching {
+                cameraInfo
+                    .cameraSelector
+                    .physicalCameraId
+            }.getOrNull()
+
+        if (selectorId != null) {
+            return selectorId
+        }
+
+        /*
+         * Camera2 interop gives us a fallback route on devices
+         * where CameraX's selector doesn't expose the ID.
+         */
+        return runCatching {
+            Camera2CameraInfo
+                .from(cameraInfo)
+                .cameraId
+        }.getOrNull()
+    }
+
+    /**
+     * null selectedCameraId means AUTO.
+     */
+    private fun chooseCamera(
+        selectedCameraId: String?,
+        cameras: List<SelectableCamera>
+    ): CameraChoice {
+
+        if (selectedCameraId != null) {
+
+            val selectedCamera =
+                cameras.firstOrNull {
+                    it.option.id ==
+                            selectedCameraId
+                }
+
+            if (selectedCamera != null) {
+                return CameraChoice(
+                    selector = selectedCamera.selector,
+
+                    physicalCameraId =
+                        selectedCamera.physicalCameraId,
+
+                    description =
+                        selectedCamera.option.label,
+
+                    selectionReason =
+                        "User selected ${selectedCamera.option.label}",
+
+                    usesDefaultBackSelector =
+                        false
+                )
+            }
+
+            return defaultBackChoice(
+                reason =
+                    "Previously selected camera " +
+                            "is no longer available"
+            )
+        }
+
+        /*
+         * AUTO behaviour:
+         *
+         * For the low-vision application we prefer the widest
+         * available rear lens if there is a genuine < 1x camera.
+         */
+        val widest =
+            cameras.minByOrNull {
+                it.option.relativeZoomRatio
+            }
+
+        if (
+            widest != null
+        ) {
+            return CameraChoice(
+                selector = widest.selector,
+
+                physicalCameraId =
+                    widest.physicalCameraId,
+
+                description =
+                    "Auto → ${widest.option.label}",
+
+                selectionReason =
+                    "Auto selected the widest discovered lens",
+
+                usesDefaultBackSelector =
+                    false
+            )
+        }
+
+        return defaultBackChoice(
+            reason =
+                "Auto found no ultra-wide lens"
         )
     }
 
     private fun defaultBackChoice(
-        backCameras: List<BackCameraDetails>,
-        selectionReason: String,
-        fellBackToDefault: Boolean = false,
-        fallbackReason: String? = null
-    ): CameraChoice {
-        val defaultCameraInfo = runCatching {
-            CameraSelector.DEFAULT_BACK_CAMERA
-                .filter(backCameras.map(BackCameraDetails::cameraInfo))
-                .firstOrNull()
-        }.getOrNull()
-        val defaultCamera = backCameras.firstOrNull { it.cameraInfo == defaultCameraInfo }
-        val targetDescription = defaultCamera?.shortDescription() ?: "CameraX default back camera"
+        reason: String
+    ) =
+        CameraChoice(
+            selector =
+                CameraSelector.DEFAULT_BACK_CAMERA,
 
-        return CameraChoice(
-            selector = CameraSelector.DEFAULT_BACK_CAMERA,
-            selectorDescription = "CameraSelector.DEFAULT_BACK_CAMERA -> $targetDescription",
-            selectionReason = selectionReason,
-            usesDefaultBackSelector = true,
-            fellBackToDefault = fellBackToDefault,
-            fallbackReason = fallbackReason
+            physicalCameraId =
+                null,
+
+            description =
+                "Default rear camera",
+
+            selectionReason =
+                reason,
+
+            usesDefaultBackSelector =
+                true
+        )
+
+    private fun cameraLabel(
+        ratio: Float
+    ): String {
+        return String.format(
+            Locale.US,
+            "%.2f×",
+            ratio
         )
     }
 
-    private fun buildDiagnostics(
-        cameraMode: CameraMode,
-        backCameras: List<BackCameraDetails>,
-        requestedChoice: CameraChoice,
-        finalSelector: String,
-        fellBackToDefault: Boolean,
-        fallbackReason: String?,
-        bindingStatus: String
-    ): String = buildString {
-        appendLine("Selected camera mode: ${cameraMode.name}")
-        appendBackCameraDiagnostics(backCameras)
-        appendLine("Selection decision: ${requestedChoice.selectionReason}")
-        appendLine("Final camera selector: $finalSelector")
-        appendLine("Fell back to default back camera: ${if (fellBackToDefault) "yes" else "no"}")
-        fallbackReason?.let { appendLine("Fallback reason: $it") }
-        append("Binding status: $bindingStatus")
+    private fun classifiedCameraLabel(
+        ratio: Float,
+    ): String {
+
+        val ratioText =
+            String.format(
+                Locale.US,
+                "%.2f×",
+                ratio
+            )
+
+        return when {
+
+            /*
+             * Optical metadata gives us the strongest clue.
+             */
+            ratio < 0.85f ->
+                "Ultra-wide $ratioText"
+
+            ratio > 1.35f ->
+                "Telephoto $ratioText"
+
+            else ->
+                "Main $ratioText"
+        }
     }
 
-    private fun buildFailureDiagnostics(
-        cameraMode: CameraMode,
-        backCameras: List<BackCameraDetails>,
-        message: String
-    ): String =
-        buildString {
-            appendLine("Selected camera mode: ${cameraMode.name}")
-            appendBackCameraDiagnostics(backCameras)
-            appendLine("CameraX diagnostics/binding failed: $message")
-            appendLine("Final camera selector: unavailable")
-            append("Fell back to default back camera: unknown")
-        }
-
-    private fun StringBuilder.appendBackCameraDiagnostics(
-        backCameras: List<BackCameraDetails>
+    private fun publishCameraOptions(
+        cameras: List<SelectableCamera>
     ) {
-        appendLine("CameraX back cameras: ${backCameras.size}")
-        if (backCameras.isEmpty()) {
-            appendLine("  None detected")
+        val options =
+            cameras.map {
+                it.option
+            }
+
+        if (options == lastCameraOptions) {
             return
         }
 
-        backCameras.forEach { camera ->
+        lastCameraOptions = options
+
+        onCameraOptionsChanged(options)
+    }
+
+    private fun buildDiagnostics(
+        cameras: List<SelectableCamera>,
+        requestedChoice: CameraChoice,
+        finalChoice: CameraChoice,
+        fellBackToDefault: Boolean,
+        fallbackReason: String?,
+        bindingStatus: String
+    ): String =
+        buildString {
+
             appendLine(
-                "  ${camera.shortDescription()}: " +
-                    "intrinsic=${camera.intrinsicZoomRatio.diagnosticValue()}, " +
-                    "zoom=${camera.zoomRangeDescription()}, " +
-                    "app class=${camera.appClassification()}"
+                "Selectable rear cameras: ${cameras.size}"
+            )
+
+            if (cameras.isEmpty()) {
+                appendLine(
+                    "  No explicit rear lenses discovered"
+                )
+            } else {
+
+                cameras.forEach { camera ->
+
+                    val option =
+                        camera.option
+
+                    appendLine(
+                        "  ${option.label}"
+                    )
+
+                    appendLine(
+                        "    Logical ID: " +
+                                option.logicalCameraId
+                    )
+
+                    appendLine(
+                        "    Physical ID: " +
+                                (
+                                        option.physicalCameraId
+                                            ?: "none"
+                                        )
+                    )
+
+                    appendLine(
+                        "    Relative zoom: " +
+                                String.format(
+                                    Locale.US,
+                                    "%.2f×",
+                                    option.relativeZoomRatio
+                                )
+                    )
+
+                    option.focalLengthMm?.let { focalLength ->
+
+                        appendLine(
+                            "    Focal length: " +
+                                    String.format(
+                                        Locale.US,
+                                        "%.2f mm",
+                                        focalLength
+                                    )
+                        )
+                    }
+
+                    option.sensorWidthMm?.let { sensorWidth ->
+
+                        appendLine(
+                            "    Sensor width: " +
+                                    String.format(
+                                        Locale.US,
+                                        "%.2f mm",
+                                        sensorWidth
+                                    )
+                        )
+                    }
+
+                    option.horizontalFovDegrees?.let { fov ->
+
+                        appendLine(
+                            "    Horizontal FOV: " +
+                                    String.format(
+                                        Locale.US,
+                                        "%.1f°",
+                                        fov
+                                    )
+                        )
+                    }
+                }
+            }
+
+            appendLine(
+                "Requested: " +
+                        requestedChoice.description
+            )
+
+            appendLine(
+                "Decision: " +
+                        requestedChoice.selectionReason
+            )
+
+            appendLine(
+                "Final: " +
+                        finalChoice.description
+            )
+
+            appendLine(
+                "Fallback: " +
+                        if (fellBackToDefault) {
+                            "yes"
+                        } else {
+                            "no"
+                        }
+            )
+
+            fallbackReason?.let {
+                appendLine(
+                    "Fallback reason: $it"
+                )
+            }
+
+            append(
+                "Binding status: $bindingStatus"
+            )
+        }
+
+    private fun publishDiagnostics(
+        diagnostics: String
+    ) {
+        currentDiagnosticsBase =
+            diagnostics
+
+        publishCombinedDiagnostics()
+    }
+
+    private fun publishCombinedDiagnostics() {
+
+        val combined =
+            buildString {
+                append(
+                    currentDiagnosticsBase
+                )
+
+                appendLine()
+                appendLine()
+
+                append(
+                    "Actual active physical ID: "
+                )
+
+                append(
+                    lastActivePhysicalCameraId
+                        ?: "unknown"
+                )
+            }
+
+        Log.d(
+            TAG,
+            combined
+        )
+
+        if (
+            combined !=
+            lastDiagnostics
+        ) {
+            lastDiagnostics =
+                combined
+
+            onCameraDiagnosticsChanged(
+                combined
             )
         }
     }
 
-    private fun describeBoundCamera(
-        camera: Camera,
-        backCameras: List<BackCameraDetails>
-    ): String = backCameras
-        .firstOrNull { it.cameraInfo == camera.cameraInfo }
-        ?.shortDescription()
-        ?: "CameraX-reported camera"
-
-    private fun publishDiagnostics(diagnostics: String) {
-        Log.d(TAG, diagnostics)
-        if (diagnostics != lastDiagnostics) {
-            lastDiagnostics = diagnostics
-            onCameraDiagnosticsChanged(diagnostics)
-        }
-    }
-
-    private fun updateTargetRotation(target: GlassesRenderTarget) {
-        val rotation = target.previewView.display?.rotation ?: return
-        currentPreview?.targetRotation = rotation
-        currentAnalysis?.targetRotation = rotation
-    }
-
-    private data class BackCameraDetails(
-        val backCameraIndex: Int,
-        val availableCameraIndex: Int,
-        val cameraInfo: CameraInfo,
-        val intrinsicZoomRatio: Float?,
-        val minZoomRatio: Float?,
-        val maxZoomRatio: Float?
+    private fun updateTargetRotation(
     ) {
-        fun shortDescription(): String =
-            "Back[$backCameraIndex] (CameraX order $availableCameraIndex)"
+        currentPreview?.targetRotation =
+            currentDeviceRotation
 
-        fun zoomRangeDescription(): String = if (minZoomRatio != null && maxZoomRatio != null) {
-            "${minZoomRatio.diagnosticValue()}..${maxZoomRatio.diagnosticValue()}"
-        } else {
-            "unavailable"
-        }
-
-        fun appClassification(): String = when {
-            intrinsicZoomRatio == null -> "UNKNOWN (not treated as ultra-wide)"
-            intrinsicZoomRatio < ULTRA_WIDE_THRESHOLD -> "ULTRA-WIDE"
-            intrinsicZoomRatio > 1f -> "TELEPHOTO (not ultra-wide)"
-            else -> "WIDE/DEFAULT"
-        }
+        currentAnalysis?.targetRotation =
+            currentDeviceRotation
     }
+
+    private data class SelectableCamera(
+        val option: CameraOption,
+        val selector: CameraSelector,
+        val physicalCameraId: String?
+    )
 
     private data class CameraChoice(
         val selector: CameraSelector,
-        val selectorDescription: String,
+        val physicalCameraId: String?,
+        val description: String,
         val selectionReason: String,
-        val usesDefaultBackSelector: Boolean,
-        val fellBackToDefault: Boolean = false,
-        val fallbackReason: String? = null
+        val usesDefaultBackSelector: Boolean
     )
 
     private companion object {
-        const val TAG = "CameraXController"
-        const val ULTRA_WIDE_THRESHOLD = 1f
+        const val TAG =
+            "CameraXController"
     }
 }
 
-private fun Float?.diagnosticValue(): String =
-    this?.let { String.format(Locale.US, "%.2f", it) } ?: "unavailable"
-
 private fun Exception.diagnosticMessage(): String =
-    cause?.message ?: message ?: javaClass.simpleName
+    cause?.message
+        ?: message
+        ?: javaClass.simpleName
+
 
 private class EdgeAnalyzer(
     private val overlayView: EdgeOverlayView,
     private val enabled: AtomicBoolean,
-    private val mainExecutor: java.util.concurrent.Executor,
+    private val mainExecutor:
+    java.util.concurrent.Executor,
     private val onError: (String) -> Unit
 ) : ImageAnalysis.Analyzer {
+
     private var hasReportedFailure = false
 
-    override fun analyze(image: ImageProxy) {
+    override fun analyze(
+        image: ImageProxy
+    ) {
         if (!enabled.get()) {
             image.close()
             return
         }
 
         try {
-            val crop = image.cropRect
-            val sampleStep = ceil(crop.width() / MAX_OUTPUT_WIDTH.toFloat()).toInt().coerceAtLeast(1)
-            val outputWidth = (crop.width() / sampleStep).coerceAtLeast(1)
-            val outputHeight = (crop.height() / sampleStep).coerceAtLeast(1)
-            val plane = image.planes.first()
-            val buffer = plane.buffer
-            val bufferStart = buffer.position()
-            val luminance = IntArray(outputWidth * outputHeight)
+            val crop =
+                image.cropRect
 
-            for (outputY in 0 until outputHeight) {
-                val sourceY = crop.top + outputY * sampleStep
-                val rowOffset = sourceY * plane.rowStride
-                for (outputX in 0 until outputWidth) {
-                    val sourceX = crop.left + outputX * sampleStep
-                    val sourceIndex = bufferStart + rowOffset + sourceX * plane.pixelStride
-                    luminance[outputY * outputWidth + outputX] =
-                        buffer.get(sourceIndex).toInt() and 0xFF
+            val sampleStep =
+                ceil(
+                    crop.width() /
+                            MAX_OUTPUT_WIDTH.toFloat()
+                )
+                    .toInt()
+                    .coerceAtLeast(1)
+
+            val outputWidth =
+                (crop.width() / sampleStep)
+                    .coerceAtLeast(1)
+
+            val outputHeight =
+                (crop.height() / sampleStep)
+                    .coerceAtLeast(1)
+
+            val plane =
+                image.planes.first()
+
+            val buffer =
+                plane.buffer
+
+            val bufferStart =
+                buffer.position()
+
+            val luminance =
+                IntArray(
+                    outputWidth *
+                            outputHeight
+                )
+
+            for (
+            outputY in
+            0 until outputHeight
+            ) {
+                val sourceY =
+                    crop.top +
+                            outputY *
+                            sampleStep
+
+                val rowOffset =
+                    sourceY *
+                            plane.rowStride
+
+                for (
+                outputX in
+                0 until outputWidth
+                ) {
+                    val sourceX =
+                        crop.left +
+                                outputX *
+                                sampleStep
+
+                    val sourceIndex =
+                        bufferStart +
+                                rowOffset +
+                                sourceX *
+                                plane.pixelStride
+
+                    luminance[
+                        outputY *
+                                outputWidth +
+                                outputX
+                    ] =
+                        buffer.get(
+                            sourceIndex
+                        )
+                            .toInt() and 0xFF
                 }
             }
 
-            val edgePixels = SobelEdgeDetector.detect(luminance, outputWidth, outputHeight)
-            val unrotatedBitmap = Bitmap.createBitmap(
-                edgePixels,
-                outputWidth,
-                outputHeight,
-                Bitmap.Config.ARGB_8888
+            val edgePixels =
+                SobelEdgeDetector.detect(
+                    luminance,
+                    outputWidth,
+                    outputHeight
+                )
+
+            val unrotatedBitmap =
+                Bitmap.createBitmap(
+                    edgePixels,
+                    outputWidth,
+                    outputHeight,
+                    Bitmap.Config.ARGB_8888
+                )
+
+            val outputBitmap =
+                rotate(
+                    unrotatedBitmap,
+                    image.imageInfo
+                        .rotationDegrees
+                )
+
+            overlayView.submit(
+                outputBitmap
             )
-            val outputBitmap = rotate(unrotatedBitmap, image.imageInfo.rotationDegrees)
-            overlayView.submit(outputBitmap)
-        } catch (exception: Exception) {
+
+        } catch (
+            exception: Exception
+        ) {
+
             if (!hasReportedFailure) {
+
                 hasReportedFailure = true
+
                 mainExecutor.execute {
-                    onError(exception.message ?: "Edge enhancement failed")
+                    onError(
+                        exception.message
+                            ?: "Edge enhancement failed"
+                    )
                 }
             }
+
         } finally {
             image.close()
         }
     }
 
-    private fun rotate(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
-        if (rotationDegrees == 0) return bitmap
-        val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
-        val rotated = Bitmap.createBitmap(
-            bitmap,
-            0,
-            0,
-            bitmap.width,
-            bitmap.height,
-            matrix,
-            true
-        )
-        if (rotated !== bitmap) bitmap.recycle()
+    private fun rotate(
+        bitmap: Bitmap,
+        rotationDegrees: Int
+    ): Bitmap {
+
+        if (rotationDegrees == 0) {
+            return bitmap
+        }
+
+        val matrix =
+            Matrix().apply {
+                postRotate(
+                    rotationDegrees.toFloat()
+                )
+            }
+
+        val rotated =
+            Bitmap.createBitmap(
+                bitmap,
+                0,
+                0,
+                bitmap.width,
+                bitmap.height,
+                matrix,
+                true
+            )
+
+        if (rotated !== bitmap) {
+            bitmap.recycle()
+        }
+
         return rotated
     }
 
     private companion object {
-        const val MAX_OUTPUT_WIDTH = 320
+        const val MAX_OUTPUT_WIDTH =
+            320
     }
 }

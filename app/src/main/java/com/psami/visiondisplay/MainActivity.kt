@@ -15,18 +15,19 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import com.psami.visiondisplay.data.CalibrationState
 import com.psami.visiondisplay.data.CalibrationStore
-import com.psami.visiondisplay.data.CameraMode
+import com.psami.visiondisplay.data.CameraOption
 import com.psami.visiondisplay.ui.CameraXController
 import com.psami.visiondisplay.ui.GlassesPresentationDialog
 import com.psami.visiondisplay.ui.GlassesRenderTarget
 import com.psami.visiondisplay.ui.components.CalibrationControlPanel
 import com.psami.visiondisplay.ui.theme.VisionDisplayTheme
+import android.os.SystemClock
+import android.view.MotionEvent
 
 class MainActivity : ComponentActivity() {
     private lateinit var displayManager: DisplayManager
@@ -34,14 +35,24 @@ class MainActivity : ComponentActivity() {
 
     private var glassesPresentation: GlassesPresentationDialog? = null
     private var renderTarget: GlassesRenderTarget? = null
-    private var latestCalibrationState = CalibrationState()
+    private var latestCalibrationState by
+    mutableStateOf(CalibrationState())
     private var isDisplayListenerRegistered = false
 
     private var hasCameraPermission by mutableStateOf(false)
     private var permissionRequestAttempted by mutableStateOf(false)
     private var isExternalDisplayConnected by mutableStateOf(false)
-    private var selectedCameraMode by mutableStateOf(CameraMode.AUTO)
+    private var cameraOptions by mutableStateOf<List<CameraOption>>(emptyList())
+
+    /*
+     * null = Auto
+     */
+    private var selectedCameraId by mutableStateOf<String?>(null)
     private var cameraDiagnostics by mutableStateOf("CameraX diagnostics are loading…")
+
+    private var displayDiagnostics by mutableStateOf(
+        "Waiting for external display…"
+    )
     private var runtimeError by mutableStateOf<String?>(null)
 
     private val cameraPermissionLauncher = registerForActivityResult(
@@ -54,7 +65,9 @@ class MainActivity : ComponentActivity() {
             synchronizeCamera()
         } else {
             cameraController.stop()
-            cameraController.refreshDiagnostics(selectedCameraMode)
+            cameraController.refreshDiagnostics(
+                selectedCameraId
+            )
         }
     }
 
@@ -66,22 +79,78 @@ class MainActivity : ComponentActivity() {
         override fun onDisplayChanged(displayId: Int) = synchronizePresentation()
     }
 
+    private fun cycleCamera() {
+        if (cameraOptions.isEmpty()) {
+            return
+        }
+
+        val currentIndex =
+            cameraOptions.indexOfFirst {
+                it.id == selectedCameraId
+            }
+
+        val nextIndex =
+            if (currentIndex == -1) {
+                0
+            } else {
+                (currentIndex + 1) %
+                        cameraOptions.size
+            }
+
+        selectedCameraId =
+            cameraOptions[nextIndex].id
+
+        runtimeError = null
+
+        synchronizeCamera()
+    }
+
+    private fun recenterGlassesCursor() {
+        renderTarget
+            ?.cursorOverlayView
+            ?.centerCursor()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         displayManager = getSystemService(DisplayManager::class.java)
-        cameraController = CameraXController(applicationContext) { diagnostics ->
-            cameraDiagnostics = diagnostics
-        }
-        cameraController.refreshDiagnostics(selectedCameraMode)
+        cameraController = CameraXController(
+            context = applicationContext,
+            onCameraDiagnosticsChanged = { diagnostics ->
+                cameraDiagnostics = diagnostics
+            },
+            onCameraOptionsChanged = { options ->
+                cameraOptions = options
+
+                /*
+                 * The camera configuration could change, e.g.
+                 * after reconnecting hardware.
+                 */
+                if (
+                    selectedCameraId != null &&
+                    options.none {
+                        it.id == selectedCameraId
+                    }
+                ) {
+                    selectedCameraId = null
+                }
+            }
+        )
+
+        cameraController.refreshCameraOptions()
+        cameraController.refreshDiagnostics(
+            selectedCameraId
+        )
         latestCalibrationState = CalibrationStore.load(this)
-        permissionRequestAttempted = savedInstanceState?.getBoolean(KEY_PERMISSION_ATTEMPTED) == true
+        permissionRequestAttempted =
+            savedInstanceState?.getBoolean(KEY_PERMISSION_ATTEMPTED) == true
         hasCameraPermission = cameraPermissionIsGranted()
 
         setContent {
-            var calibrationState by remember { mutableStateOf(latestCalibrationState) }
+
             val shouldOpenSettings = !hasCameraPermission &&
-                permissionRequestAttempted &&
-                !shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)
+                    permissionRequestAttempted &&
+                    !shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)
 
             LaunchedEffect(Unit) {
                 if (!hasCameraPermission && !permissionRequestAttempted) {
@@ -91,10 +160,12 @@ class MainActivity : ComponentActivity() {
 
             VisionDisplayTheme {
                 CalibrationControlPanel(
-                    state = calibrationState,
+                    state = latestCalibrationState,
                     hasCameraPermission = hasCameraPermission,
                     isExternalDisplayConnected = isExternalDisplayConnected,
-                    cameraMode = selectedCameraMode,
+                    displayDiagnostics = displayDiagnostics,
+                    cameraOptions = cameraOptions,
+                    selectedCameraId = selectedCameraId,
                     cameraDiagnostics = cameraDiagnostics,
                     runtimeError = runtimeError,
                     cameraPermissionActionLabel = if (shouldOpenSettings) {
@@ -111,23 +182,26 @@ class MainActivity : ComponentActivity() {
                         synchronizePresentation()
                         synchronizeCamera()
                     },
-                    onCameraModeChange = { cameraMode ->
-                        if (cameraMode != selectedCameraMode) {
-                            selectedCameraMode = cameraMode
+                    onCameraSelectionChange = { cameraId ->
+                        if (cameraId != selectedCameraId) {
+                            selectedCameraId = cameraId
                             runtimeError = null
+
                             synchronizeCamera()
                         }
                     },
                     onStateChange = { requestedState ->
-                        val newState = requestedState.normalized()
-                        calibrationState = newState
-                        latestCalibrationState = newState
-                        CalibrationStore.save(this, newState)
-                        glassesPresentation?.updateState(newState)
-                        cameraController.setEdgeEnhancementEnabled(
-                            newState.isEdgeEnhancementEnabled
+                        applyCalibrationState(requestedState)
+                    },
+                    onCursorMove = { deltaX, deltaY ->
+                        moveGlassesCursor(
+                            deltaX,
+                            deltaY
                         )
-                    }
+                    },
+                    onCursorClick = {
+                        clickGlassesCursor()
+                    },
                 )
             }
         }
@@ -197,12 +271,25 @@ class MainActivity : ComponentActivity() {
             context = this,
             display = targetDisplay,
             initialState = latestCalibrationState,
+            onDisplayDiagnosticsChanged = { diagnostics ->
+                displayDiagnostics = diagnostics
+            },
             onRenderTargetReady = { target ->
                 if (glassesPresentation === presentation) {
                     renderTarget = target
                     synchronizeCamera()
                 }
-            }
+            },
+            onToggleEdgeEnhancement = {
+                toggleEdgeEnhancement()
+            },
+            onCycleCamera = {
+                cycleCamera()
+            },
+
+            onRecenterCursor = {
+                recenterGlassesCursor()
+            },
         )
         presentation.setOnDismissListener {
             if (glassesPresentation === presentation) {
@@ -210,7 +297,9 @@ class MainActivity : ComponentActivity() {
                 renderTarget = null
                 isExternalDisplayConnected = false
                 cameraController.stop()
-                cameraController.refreshDiagnostics(selectedCameraMode)
+                cameraController.refreshDiagnostics(
+                    selectedCameraId
+                )
             }
         }
         glassesPresentation = presentation
@@ -235,8 +324,10 @@ class MainActivity : ComponentActivity() {
         renderTarget = null
         isExternalDisplayConnected = false
         cameraController.stop()
-        cameraController.refreshDiagnostics(selectedCameraMode)
-
+        cameraController.refreshDiagnostics(
+            selectedCameraId
+        )
+        displayDiagnostics = "Waiting for external display…"
         presentation?.setOnDismissListener(null)
         if (presentation?.isShowing == true) {
             presentation.dismiss()
@@ -256,13 +347,19 @@ class MainActivity : ComponentActivity() {
             cameraController.start(
                 lifecycleOwner = this,
                 target = target,
-                edgeEnhancementEnabled = latestCalibrationState.isEdgeEnhancementEnabled,
-                cameraMode = selectedCameraMode,
-                onError = { message -> runtimeError = message }
+                edgeEnhancementEnabled =
+                    latestCalibrationState.isEdgeEnhancementEnabled,
+                selectedCameraId =
+                    selectedCameraId,
+                onError = { message ->
+                    runtimeError = message
+                }
             )
         } else {
             cameraController.stop()
-            cameraController.refreshDiagnostics(selectedCameraMode)
+            cameraController.refreshDiagnostics(
+                selectedCameraId
+            )
         }
     }
 
@@ -284,6 +381,101 @@ class MainActivity : ComponentActivity() {
             )
         )
     }
+
+    private fun applyCalibrationState(
+        requestedState: CalibrationState
+    ) {
+        val newState =
+            requestedState.normalized()
+
+        latestCalibrationState =
+            newState
+
+        CalibrationStore.save(
+            this,
+            newState
+        )
+
+        glassesPresentation
+            ?.updateState(newState)
+
+        cameraController
+            .setEdgeEnhancementEnabled(
+                newState.isEdgeEnhancementEnabled
+            )
+    }
+
+    private fun toggleEdgeEnhancement() {
+        applyCalibrationState(
+            latestCalibrationState.copy(
+                isEdgeEnhancementEnabled =
+                    !latestCalibrationState
+                        .isEdgeEnhancementEnabled
+            )
+        )
+    }
+
+    private fun moveGlassesCursor(
+        deltaX: Float,
+        deltaY: Float
+    ) {
+        val target =
+            renderTarget
+                ?: return
+
+        val sensitivity = 1.8f
+
+        target.cursorOverlayView.moveBy(
+            deltaX = deltaX * sensitivity,
+            deltaY = deltaY * sensitivity
+        )
+    }
+
+    private fun clickGlassesCursor() {
+        val target =
+            renderTarget
+                ?: return
+
+        val position =
+            target.cursorOverlayView
+                .currentPosition()
+                ?: return
+
+        val eventTime =
+            SystemClock.uptimeMillis()
+
+        val down =
+            MotionEvent.obtain(
+                eventTime,
+                eventTime,
+                MotionEvent.ACTION_DOWN,
+                position.x,
+                position.y,
+                0
+            )
+
+        val up =
+            MotionEvent.obtain(
+                eventTime,
+                eventTime + 16,
+                MotionEvent.ACTION_UP,
+                position.x,
+                position.y,
+                0
+            )
+
+        try {
+            target.interactionLayer
+                .dispatchTouchEvent(down)
+
+            target.interactionLayer
+                .dispatchTouchEvent(up)
+        } finally {
+            down.recycle()
+            up.recycle()
+        }
+    }
+
 
     private companion object {
         const val KEY_PERMISSION_ATTEMPTED = "camera_permission_attempted"

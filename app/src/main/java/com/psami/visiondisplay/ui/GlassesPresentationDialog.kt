@@ -5,13 +5,16 @@ import android.content.Context
 import android.graphics.Color
 import android.os.Bundle
 import android.view.Display
+import android.view.Gravity
 import android.view.ViewGroup
+import android.widget.Button
 import android.widget.FrameLayout
 import androidx.camera.view.PreviewView
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.doOnAttach
 import com.psami.visiondisplay.data.CalibrationState
 import kotlin.math.roundToInt
+import android.widget.LinearLayout
 
 internal data class CalibrationLayout(
     val width: Int,
@@ -45,7 +48,11 @@ class GlassesPresentationDialog(
     context: Context,
     display: Display,
     initialState: CalibrationState,
-    private val onRenderTargetReady: (GlassesRenderTarget) -> Unit
+    private val onRenderTargetReady: (GlassesRenderTarget) -> Unit,
+    private val onDisplayDiagnosticsChanged: (String) -> Unit,
+    private val onToggleEdgeEnhancement: () -> Unit,
+    private val onCycleCamera: () -> Unit,
+    private val onRecenterCursor: () -> Unit,
 ) : Presentation(context, display) {
     private var currentState = initialState.normalized()
     private var rootContainer: FrameLayout? = null
@@ -61,6 +68,43 @@ class GlassesPresentationDialog(
         }
         val content = FrameLayout(context)
 
+        val controls =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+            }
+
+        val edgesButton =
+            Button(context).apply {
+                text = "Edges"
+
+                setOnClickListener {
+                    onToggleEdgeEnhancement()
+                }
+            }
+
+        val cameraButton =
+            Button(context).apply {
+                text = "Camera"
+
+                setOnClickListener {
+                    onCycleCamera()
+                }
+            }
+
+        val recenterButton =
+            Button(context).apply {
+                text = "Recenter"
+
+                setOnClickListener {
+                    onRecenterCursor()
+                }
+            }
+
+        controls.addView(edgesButton)
+        controls.addView(cameraButton)
+        controls.addView(recenterButton)
+
         val previewView = PreviewView(context).apply {
             // TextureView mode keeps scaling and the edge overlay synchronized while calibrating.
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
@@ -68,9 +112,41 @@ class GlassesPresentationDialog(
             scaleType = PreviewView.ScaleType.FIT_CENTER
         }
         val overlayView = EdgeOverlayView(context)
+        val cursorOverlayView =
+            CursorOverlayView(context)
+
+        val interactionLayer =
+            FrameLayout(context)
+
+        val buttonMargin =
+            (48 * resources.displayMetrics.density)
+                .roundToInt()
+
+        interactionLayer.addView(
+            controls,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity =
+                    Gravity.BOTTOM or
+                            Gravity.CENTER_HORIZONTAL
+
+                bottomMargin =
+                    buttonMargin
+            }
+        )
 
         content.addView(previewView, matchParentLayoutParams())
         content.addView(overlayView, matchParentLayoutParams())
+        content.addView(
+            interactionLayer,
+            matchParentLayoutParams()
+        )
+        content.addView(
+            cursorOverlayView,
+            matchParentLayoutParams()
+        )
         root.addView(content, matchParentLayoutParams())
         setContentView(root)
 
@@ -79,9 +155,23 @@ class GlassesPresentationDialog(
         edgeOverlayView = overlayView
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyCalibration() }
 
+        root.post {
+            publishDisplayDiagnostics()
+        }
+
         updateState(currentState)
         previewView.doOnAttach {
-            onRenderTargetReady(GlassesRenderTarget(previewView, overlayView))
+            cursorOverlayView.post {
+                cursorOverlayView.centerCursor()
+            }
+            onRenderTargetReady(
+                GlassesRenderTarget(
+                    previewView,
+                    overlayView,
+                    interactionLayer,
+                    cursorOverlayView
+                )
+            )
         }
     }
 
@@ -89,6 +179,9 @@ class GlassesPresentationDialog(
         currentState = newState.normalized()
         edgeOverlayView?.setEdgeEnhancementEnabled(currentState.isEdgeEnhancementEnabled)
         applyCalibration()
+        rootContainer?.post {
+            publishDisplayDiagnostics()
+        }
     }
 
     override fun dismiss() {
@@ -119,6 +212,41 @@ class GlassesPresentationDialog(
             layoutParams.topMargin = calibrationLayout.topMargin
             content.layoutParams = layoutParams
         }
+    }
+
+    private fun publishDisplayDiagnostics() {
+        val root = rootContainer ?: return
+        val content = contentContainer ?: return
+
+        val mode = display.mode
+
+        onDisplayDiagnosticsChanged(
+            buildString {
+                appendLine(
+                    "Display mode: ${mode.physicalWidth} × ${mode.physicalHeight}"
+                )
+
+                appendLine(
+                    "Refresh rate: ${"%.1f".format(mode.refreshRate)} Hz"
+                )
+
+                appendLine(
+                    "Rotation: ${display.rotation}"
+                )
+
+                appendLine(
+                    "Root: ${root.width} × ${root.height}"
+                )
+
+                appendLine(
+                    "Content: ${content.width} × ${content.height}"
+                )
+
+                append(
+                    "Compression: ${"%.2f".format(currentState.compressionScale)}"
+                )
+            }
+        )
     }
 
     private fun matchParentLayoutParams() = FrameLayout.LayoutParams(
