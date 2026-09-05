@@ -4,7 +4,9 @@ data class CalibrationState(
     val compressionScale: Float = 1.0f, // 0.1 (10%) to 1.0 (100%)
     val offsetX: Float = 0f,            // -1.0 (left) to 1.0 (right)
     val offsetY: Float = 0f,            // -1.0 (top) to 1.0 (bottom)
-    val isEdgeEnhancementEnabled: Boolean = false
+    val isEdgeEnhancementEnabled: Boolean = false,
+    val viewportShape: ViewportShape =
+        ViewportShape.WIDE_ELLIPSE,
 ) {
     fun normalized(): CalibrationState = copy(
         compressionScale = compressionScale

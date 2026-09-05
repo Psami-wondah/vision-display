@@ -1,13 +1,18 @@
 package com.psami.visiondisplay.ui.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -16,24 +21,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.psami.visiondisplay.data.CalibrationState
 import com.psami.visiondisplay.data.CameraOption
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.clickable
+import com.psami.visiondisplay.data.ViewportShape
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,6 +57,16 @@ fun CalibrationControlPanel(
         deltaY: Float
     ) -> Unit,
     onCursorClick: () -> Unit,
+    onViewportPan: (
+        deltaX: Float,
+        deltaY: Float
+    ) -> Unit,
+
+    onViewportScale: (
+        scaleFactor: Float
+    ) -> Unit,
+
+    onViewportReset: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -340,41 +351,221 @@ fun CalibrationControlPanel(
                 }
             }
 
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
+            Card(
+                modifier =
+                    Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier =
+                        Modifier.padding(16.dp),
+
+                    verticalArrangement =
+                        Arrangement.spacedBy(8.dp)
+                ) {
+
                     Text(
-                        text = "Visual compression: ${(state.compressionScale * 100).toInt()}%",
-                        style = MaterialTheme.typography.titleMedium
+                        text = "Viewport shape",
+                        style =
+                            MaterialTheme
+                                .typography
+                                .titleMedium
                     )
-                    Slider(
-                        value = state.compressionScale,
-                        onValueChange = { onStateChange(state.copy(compressionScale = it)) },
-                        valueRange = CalibrationState.MIN_COMPRESSION..CalibrationState.MAX_COMPRESSION
+
+                    Text(
+                        text =
+                            "Choose the shape shown on the glasses.",
+                        style =
+                            MaterialTheme
+                                .typography
+                                .bodySmall
                     )
+
+                    val shapes =
+                        listOf(
+                            ViewportShape.CIRCLE
+                                    to "Circle",
+
+                            ViewportShape.WIDE_ELLIPSE
+                                    to "Wide ellipse",
+
+                            ViewportShape.RECTANGLE
+                                    to "Rectangle"
+                        )
+
+                    shapes.forEach {
+                            (shape, label) ->
+
+                        Row(
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        onStateChange(
+                                            state.copy(
+                                                viewportShape =
+                                                    shape
+                                            )
+                                        )
+                                    }
+                                    .padding(
+                                        vertical = 4.dp
+                                    ),
+
+                            verticalAlignment =
+                                Alignment.CenterVertically
+                        ) {
+
+                            RadioButton(
+                                selected =
+                                    state.viewportShape ==
+                                            shape,
+
+                                onClick = {
+                                    onStateChange(
+                                        state.copy(
+                                            viewportShape =
+                                                shape
+                                        )
+                                    )
+                                }
+                            )
+
+                            Text(
+                                text = label
+                            )
+                        }
+                    }
                 }
             }
 
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Spatial alignment", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text("Horizontal shift: ${"%.2f".format(state.offsetX)}")
-                    Slider(
-                        value = state.offsetX,
-                        onValueChange = { onStateChange(state.copy(offsetX = it)) },
-                        valueRange = CalibrationState.MIN_OFFSET..CalibrationState.MAX_OFFSET
+            Card(
+                modifier =
+                    Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier =
+                        Modifier.padding(16.dp),
+                    verticalArrangement =
+                        Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Camera viewport",
+                        style =
+                            MaterialTheme
+                                .typography
+                                .titleMedium
                     )
 
-                    Text("Vertical shift: ${"%.2f".format(state.offsetY)}")
-                    Slider(
-                        value = state.offsetY,
-                        onValueChange = { onStateChange(state.copy(offsetY = it)) },
-                        valueRange = CalibrationState.MIN_OFFSET..CalibrationState.MAX_OFFSET
+                    Text(
+                        text =
+                            "Drag to move the camera view. " +
+                                    "Pinch to resize it.",
+                        style =
+                            MaterialTheme
+                                .typography
+                                .bodySmall
                     )
+
+                    Text(
+                        text =
+                            "Size: " +
+                                    "${(state.compressionScale * 100).toInt()}%  " +
+                                    "X: ${"%.2f".format(state.offsetX)}  " +
+                                    "Y: ${"%.2f".format(state.offsetY)}",
+                        style =
+                            MaterialTheme
+                                .typography
+                                .bodySmall
+                    )
+
+                    Box(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .height(220.dp)
+                                .background(
+                                    color =
+                                        MaterialTheme
+                                            .colorScheme
+                                            .surfaceVariant,
+
+                                    shape =
+                                        RoundedCornerShape(
+                                            12.dp
+                                        )
+                                )
+                                .pointerInput(Unit) {
+
+                                    detectTransformGestures(
+                                        panZoomLock = true
+                                    ) { _,
+                                        pan,
+                                        zoom,
+                                        _ ->
+
+                                        /*
+                                         * Convert movement on the
+                                         * phone pad into -1..+1
+                                         * viewport coordinates.
+                                         */
+                                        if (
+                                            size.width > 0 &&
+                                            size.height > 0
+                                        ) {
+                                            onViewportPan(
+                                                (pan.x /
+                                                        size.width) *
+                                                        2f,
+
+                                                (pan.y /
+                                                        size.height) *
+                                                        2f
+                                            )
+                                        }
+
+                                        /*
+                                         * Pinch apart:
+                                         * viewport gets larger.
+                                         *
+                                         * Pinch together:
+                                         * viewport gets smaller.
+                                         */
+                                        if (
+                                            zoom.isFinite() &&
+                                            zoom > 0f &&
+                                            zoom != 1f
+                                        ) {
+                                            onViewportScale(
+                                                zoom
+                                            )
+                                        }
+                                    }
+                                }
+                    ) {
+                        Text(
+                            text =
+                                "Move / pinch",
+                            modifier =
+                                Modifier.align(
+                                    Alignment.Center
+                                ),
+                            style =
+                                MaterialTheme
+                                    .typography
+                                    .bodyMedium
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick =
+                            onViewportReset
+                    ) {
+                        Text(
+                            "Reset viewport"
+                        )
+                    }
                 }
             }
-
             Card(modifier = Modifier.fillMaxWidth()) {
                 Row(
                     modifier = Modifier

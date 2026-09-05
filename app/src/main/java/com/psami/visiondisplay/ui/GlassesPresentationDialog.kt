@@ -3,18 +3,22 @@ package com.psami.visiondisplay.ui
 import android.app.Presentation
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Outline
 import android.os.Bundle
 import android.view.Display
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import androidx.camera.view.PreviewView
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.doOnAttach
 import com.psami.visiondisplay.data.CalibrationState
+import com.psami.visiondisplay.data.ViewportShape
 import kotlin.math.roundToInt
-import android.widget.LinearLayout
 
 internal data class CalibrationLayout(
     val width: Int,
@@ -28,19 +32,92 @@ internal fun calculateCalibrationLayout(
     rootHeight: Int,
     state: CalibrationState
 ): CalibrationLayout {
-    val normalizedState = state.normalized()
-    val contentWidth = rootWidth * normalizedState.compressionScale
-    val contentHeight = rootHeight * normalizedState.compressionScale
-    val maxHorizontalTravel = rootWidth - contentWidth
-    val maxVerticalTravel = rootHeight - contentHeight
-    val leftMargin = maxHorizontalTravel * ((normalizedState.offsetX + 1f) / 2f)
-    val topMargin = maxVerticalTravel * ((normalizedState.offsetY + 1f) / 2f)
+
+    val normalizedState =
+        state.normalized()
+
+    val contentWidth: Float
+    val contentHeight: Float
+
+    when (
+        normalizedState.viewportShape
+    ) {
+        ViewportShape.CIRCLE -> {
+
+            val diameter =
+                minOf(
+                    rootWidth,
+                    rootHeight
+                ) *
+                        normalizedState
+                            .compressionScale
+
+            contentWidth =
+                diameter
+
+            contentHeight =
+                diameter
+        }
+
+        ViewportShape.WIDE_ELLIPSE,
+        ViewportShape.RECTANGLE -> {
+
+            contentWidth =
+                rootWidth *
+                        normalizedState
+                            .compressionScale
+
+            contentHeight =
+                rootHeight *
+                        normalizedState
+                            .compressionScale
+        }
+    }
+
+    val maxHorizontalTravel =
+        rootWidth -
+                contentWidth
+
+    val maxVerticalTravel =
+        rootHeight -
+                contentHeight
+
+    val leftMargin =
+        maxHorizontalTravel *
+                (
+                        (
+                                normalizedState.offsetX +
+                                        1f
+                                ) /
+                                2f
+                        )
+
+    val topMargin =
+        maxVerticalTravel *
+                (
+                        (
+                                normalizedState.offsetY +
+                                        1f
+                                ) /
+                                2f
+                        )
 
     return CalibrationLayout(
-        width = contentWidth.roundToInt(),
-        height = contentHeight.roundToInt(),
-        leftMargin = leftMargin.roundToInt(),
-        topMargin = topMargin.roundToInt()
+        width =
+            contentWidth
+                .roundToInt(),
+
+        height =
+            contentHeight
+                .roundToInt(),
+
+        leftMargin =
+            leftMargin
+                .roundToInt(),
+
+        topMargin =
+            topMargin
+                .roundToInt()
     )
 }
 
@@ -48,34 +125,122 @@ class GlassesPresentationDialog(
     context: Context,
     display: Display,
     initialState: CalibrationState,
-    private val onRenderTargetReady: (GlassesRenderTarget) -> Unit,
-    private val onDisplayDiagnosticsChanged: (String) -> Unit,
-    private val onToggleEdgeEnhancement: () -> Unit,
-    private val onCycleCamera: () -> Unit,
-    private val onRecenterCursor: () -> Unit,
-) : Presentation(context, display) {
-    private var currentState = initialState.normalized()
-    private var rootContainer: FrameLayout? = null
-    private var contentContainer: FrameLayout? = null
-    private var edgeOverlayView: EdgeOverlayView? = null
+    private val onRenderTargetReady:
+        (GlassesRenderTarget) -> Unit,
+    private val onDisplayDiagnosticsChanged:
+        (String) -> Unit,
+    private val onToggleEdgeEnhancement:
+        () -> Unit,
+    private val onCycleCamera:
+        () -> Unit,
+    private val onRecenterCursor:
+        () -> Unit,
+) : Presentation(
+    context,
+    display
+) {
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        window?.setBackgroundDrawable(Color.BLACK.toDrawable())
+    private var currentState =
+        initialState.normalized()
 
-        val root = FrameLayout(context).apply {
-            setBackgroundColor(Color.BLACK)
-        }
-        val content = FrameLayout(context)
+    private var rootContainer:
+            FrameLayout? = null
 
+    private var cameraViewportContainer:
+            FrameLayout? = null
+
+    private var previewView:
+            PreviewView? = null
+
+    private var edgeOverlayView:
+            EdgeOverlayView? = null
+
+    override fun onCreate(
+        savedInstanceState: Bundle?
+    ) {
+        super.onCreate(
+            savedInstanceState
+        )
+
+        window?.setBackgroundDrawable(
+            Color.BLACK.toDrawable()
+        )
+
+        val root =
+            FrameLayout(context).apply {
+                setBackgroundColor(
+                    Color.BLACK
+                )
+            }
+
+        /*
+         * Only this view gets moved,
+         * resized and clipped.
+         */
+        val cameraViewport =
+            FrameLayout(context).apply {
+
+                outlineProvider =
+                    object :
+                        ViewOutlineProvider() {
+
+                        override fun getOutline(
+                            view: View,
+                            outline: Outline
+                        ) {
+                            if (
+                                view.width > 0 &&
+                                view.height > 0
+                            ) {
+                                outline.setOval(
+                                    0,
+                                    0,
+                                    view.width,
+                                    view.height
+                                )
+                            }
+                        }
+                    }
+            }
+
+        val preview =
+            PreviewView(context).apply {
+
+                implementationMode =
+                    PreviewView
+                        .ImplementationMode
+                        .COMPATIBLE
+
+                scaleType =
+                    PreviewView
+                        .ScaleType
+                        .FIT_CENTER
+            }
+
+        val overlayView =
+            EdgeOverlayView(context)
+
+        val cursorOverlayView =
+            CursorOverlayView(context)
+
+        val interactionLayer =
+            FrameLayout(context)
+
+        /*
+         * GLASSES CONTROLS
+         */
         val controls =
             LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER
+                orientation =
+                    LinearLayout.HORIZONTAL
+
+                gravity =
+                    Gravity.CENTER
             }
 
         val edgesButton =
             Button(context).apply {
+
                 text = "Edges"
 
                 setOnClickListener {
@@ -85,6 +250,7 @@ class GlassesPresentationDialog(
 
         val cameraButton =
             Button(context).apply {
+
                 text = "Camera"
 
                 setOnClickListener {
@@ -94,6 +260,7 @@ class GlassesPresentationDialog(
 
         val recenterButton =
             Button(context).apply {
+
                 text = "Recenter"
 
                 setOnClickListener {
@@ -101,84 +268,159 @@ class GlassesPresentationDialog(
                 }
             }
 
-        controls.addView(edgesButton)
-        controls.addView(cameraButton)
-        controls.addView(recenterButton)
+        controls.addView(
+            edgesButton
+        )
 
-        val previewView = PreviewView(context).apply {
-            // TextureView mode keeps scaling and the edge overlay synchronized while calibrating.
-            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-            // Preserve the full camera frame instead of cropping away the wide-angle edges.
-            scaleType = PreviewView.ScaleType.FIT_CENTER
-        }
-        val overlayView = EdgeOverlayView(context)
-        val cursorOverlayView =
-            CursorOverlayView(context)
+        controls.addView(
+            cameraButton
+        )
 
-        val interactionLayer =
-            FrameLayout(context)
+        controls.addView(
+            recenterButton
+        )
 
         val buttonMargin =
-            (48 * resources.displayMetrics.density)
+            (
+                    48 *
+                            resources
+                                .displayMetrics
+                                .density
+                    )
                 .roundToInt()
 
         interactionLayer.addView(
             controls,
             FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
+                ViewGroup.LayoutParams
+                    .WRAP_CONTENT,
+
+                ViewGroup.LayoutParams
+                    .WRAP_CONTENT
             ).apply {
+
                 gravity =
                     Gravity.BOTTOM or
-                            Gravity.CENTER_HORIZONTAL
+                            Gravity
+                                .CENTER_HORIZONTAL
 
                 bottomMargin =
                     buttonMargin
             }
         )
 
-        content.addView(previewView, matchParentLayoutParams())
-        content.addView(overlayView, matchParentLayoutParams())
-        content.addView(
+        /*
+         * CAMERA VIEWPORT
+         */
+        cameraViewport.addView(
+            preview,
+            matchParentLayoutParams()
+        )
+
+        cameraViewport.addView(
+            overlayView,
+            matchParentLayoutParams()
+        )
+
+        /*
+         * ROOT LAYERS
+         *
+         * Camera moves independently.
+         * Controls and cursor stay fixed.
+         */
+        root.addView(
+            cameraViewport,
+            matchParentLayoutParams()
+        )
+
+        root.addView(
             interactionLayer,
             matchParentLayoutParams()
         )
-        content.addView(
+
+        root.addView(
             cursorOverlayView,
             matchParentLayoutParams()
         )
-        root.addView(content, matchParentLayoutParams())
-        setContentView(root)
 
-        rootContainer = root
-        contentContainer = content
-        edgeOverlayView = overlayView
-        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyCalibration() }
+        setContentView(
+            root
+        )
+
+        rootContainer =
+            root
+
+        cameraViewportContainer =
+            cameraViewport
+
+        previewView =
+            preview
+
+        edgeOverlayView =
+            overlayView
+
+        root.addOnLayoutChangeListener { _,
+                                         _,
+                                         _,
+                                         _,
+                                         _,
+                                         _,
+                                         _,
+                                         _,
+                                         _ ->
+
+            applyCalibration()
+        }
 
         root.post {
             publishDisplayDiagnostics()
         }
 
-        updateState(currentState)
-        previewView.doOnAttach {
+        updateState(
+            currentState
+        )
+
+        preview.doOnAttach {
+
             cursorOverlayView.post {
-                cursorOverlayView.centerCursor()
+                cursorOverlayView
+                    .centerCursor()
             }
+
             onRenderTargetReady(
                 GlassesRenderTarget(
-                    previewView,
-                    overlayView,
-                    interactionLayer,
-                    cursorOverlayView
+                    previewView =
+                        preview,
+
+                    edgeOverlayView =
+                        overlayView,
+
+                    interactionLayer =
+                        interactionLayer,
+
+                    cursorOverlayView =
+                        cursorOverlayView
                 )
             )
         }
     }
 
-    fun updateState(newState: CalibrationState) {
-        currentState = newState.normalized()
-        edgeOverlayView?.setEdgeEnhancementEnabled(currentState.isEdgeEnhancementEnabled)
+    fun updateState(
+        newState: CalibrationState
+    ) {
+        currentState =
+            newState.normalized()
+
+        edgeOverlayView
+            ?.setEdgeEnhancementEnabled(
+                currentState
+                    .isEdgeEnhancementEnabled
+            )
+
+        applyViewportAppearance()
+
         applyCalibration()
+
         rootContainer?.post {
             publishDisplayDiagnostics()
         }
@@ -189,68 +431,205 @@ class GlassesPresentationDialog(
         super.dismiss()
     }
 
+    private fun applyViewportAppearance() {
+
+        val viewport =
+            cameraViewportContainer
+                ?: return
+
+        val isCircle =
+            currentState.viewportShape ==
+                    ViewportShape.CIRCLE
+
+        val shouldClip =
+            currentState.viewportShape !=
+                    ViewportShape.RECTANGLE
+
+        /*
+         * Rectangle:
+         * no clipping.
+         *
+         * Circle / ellipse:
+         * oval clipping.
+         */
+        viewport.clipToOutline =
+            shouldClip
+
+        /*
+         * Circle needs to fill the square.
+         *
+         * This intentionally crops some
+         * horizontal camera information.
+         */
+        previewView?.scaleType =
+            if (isCircle) {
+                PreviewView
+                    .ScaleType
+                    .FILL_CENTER
+            } else {
+                PreviewView
+                    .ScaleType
+                    .FIT_CENTER
+            }
+
+        /*
+         * Keep Sobel overlay scaling
+         * consistent with PreviewView.
+         */
+        edgeOverlayView
+            ?.setFillCenter(
+                isCircle
+            )
+
+        viewport.invalidateOutline()
+    }
+
     private fun applyCalibration() {
-        val root = rootContainer ?: return
-        val content = contentContainer ?: return
-        if (root.width == 0 || root.height == 0) return
 
-        val calibrationLayout = calculateCalibrationLayout(root.width, root.height, currentState)
-        val layoutParams = content.layoutParams as FrameLayout.LayoutParams
+        val root =
+            rootContainer
+                ?: return
 
-        // The compressed viewport is laid out inside the unused black display area. At full
-        // scale there is no spare area, so offsets intentionally have no visible effect. At a
-        // smaller scale, -1/0/+1 place the viewport at the left/centre/right or top/centre/bottom.
+        val viewport =
+            cameraViewportContainer
+                ?: return
+
         if (
-            layoutParams.width != calibrationLayout.width ||
-            layoutParams.height != calibrationLayout.height ||
-            layoutParams.leftMargin != calibrationLayout.leftMargin ||
-            layoutParams.topMargin != calibrationLayout.topMargin
+            root.width == 0 ||
+            root.height == 0
         ) {
-            layoutParams.width = calibrationLayout.width
-            layoutParams.height = calibrationLayout.height
-            layoutParams.leftMargin = calibrationLayout.leftMargin
-            layoutParams.topMargin = calibrationLayout.topMargin
-            content.layoutParams = layoutParams
+            return
+        }
+
+        val calibrationLayout =
+            calculateCalibrationLayout(
+                root.width,
+                root.height,
+                currentState
+            )
+
+        val layoutParams =
+            viewport.layoutParams
+                    as FrameLayout.LayoutParams
+
+        if (
+            layoutParams.width !=
+            calibrationLayout.width ||
+
+            layoutParams.height !=
+            calibrationLayout.height ||
+
+            layoutParams.leftMargin !=
+            calibrationLayout
+                .leftMargin ||
+
+            layoutParams.topMargin !=
+            calibrationLayout
+                .topMargin
+        ) {
+
+            layoutParams.width =
+                calibrationLayout.width
+
+            layoutParams.height =
+                calibrationLayout.height
+
+            layoutParams.leftMargin =
+                calibrationLayout
+                    .leftMargin
+
+            layoutParams.topMargin =
+                calibrationLayout
+                    .topMargin
+
+            viewport.layoutParams =
+                layoutParams
+
+            /*
+             * Dimensions changed, so
+             * recalculate the oval.
+             */
+            viewport.post {
+                viewport
+                    .invalidateOutline()
+            }
         }
     }
 
     private fun publishDisplayDiagnostics() {
-        val root = rootContainer ?: return
-        val content = contentContainer ?: return
 
-        val mode = display.mode
+        val root =
+            rootContainer
+                ?: return
+
+        val viewport =
+            cameraViewportContainer
+                ?: return
+
+        val mode =
+            display.mode
 
         onDisplayDiagnosticsChanged(
             buildString {
+
                 appendLine(
-                    "Display mode: ${mode.physicalWidth} × ${mode.physicalHeight}"
+                    "Display mode: " +
+                            "${mode.physicalWidth} × " +
+                            "${mode.physicalHeight}"
                 )
 
                 appendLine(
-                    "Refresh rate: ${"%.1f".format(mode.refreshRate)} Hz"
+                    "Refresh rate: " +
+                            "${"%.1f".format(mode.refreshRate)} Hz"
                 )
 
                 appendLine(
-                    "Rotation: ${display.rotation}"
+                    "Rotation: " +
+                            display.rotation
                 )
 
                 appendLine(
-                    "Root: ${root.width} × ${root.height}"
+                    "Root: " +
+                            "${root.width} × " +
+                            "${root.height}"
                 )
 
                 appendLine(
-                    "Content: ${content.width} × ${content.height}"
+                    "Viewport: " +
+                            "${viewport.width} × " +
+                            "${viewport.height}"
+                )
+
+                appendLine(
+                    "Viewport position: " +
+                            "${viewport.left}, " +
+                            "${viewport.top}"
+                )
+
+                appendLine(
+                    "Shape: " +
+                            currentState
+                                .viewportShape
+                                .name
                 )
 
                 append(
-                    "Compression: ${"%.2f".format(currentState.compressionScale)}"
+                    "Compression: " +
+                            "%.2f".format(
+                                currentState
+                                    .compressionScale
+                            )
                 )
             }
         )
     }
 
-    private fun matchParentLayoutParams() = FrameLayout.LayoutParams(
-        ViewGroup.LayoutParams.MATCH_PARENT,
-        ViewGroup.LayoutParams.MATCH_PARENT
-    )
+    private fun matchParentLayoutParams() =
+        FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams
+                .MATCH_PARENT,
+
+            ViewGroup.LayoutParams
+                .MATCH_PARENT
+        )
 }

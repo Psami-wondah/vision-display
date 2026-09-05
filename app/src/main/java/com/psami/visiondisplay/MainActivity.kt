@@ -111,6 +111,79 @@ class MainActivity : ComponentActivity() {
             ?.centerCursor()
     }
 
+    private fun scaleCameraViewport(
+        scaleFactor: Float
+    ) {
+        if (
+            !scaleFactor.isFinite() ||
+            scaleFactor <= 0f
+        ) {
+            return
+        }
+
+        val newScale =
+            (
+                    latestCalibrationState
+                        .compressionScale *
+                            scaleFactor
+                    )
+                .coerceIn(
+                    CalibrationState.MIN_COMPRESSION,
+                    CalibrationState.MAX_COMPRESSION
+                )
+
+        applyCalibrationState(
+            latestCalibrationState.copy(
+                compressionScale =
+                    newScale
+            )
+        )
+    }
+
+    private fun panCameraViewport(
+        deltaX: Float,
+        deltaY: Float
+    ) {
+        applyCalibrationState(
+            latestCalibrationState.copy(
+                offsetX =
+                    (
+                            latestCalibrationState.offsetX +
+                                    deltaX
+                            )
+                        .coerceIn(
+                            CalibrationState.MIN_OFFSET,
+                            CalibrationState.MAX_OFFSET
+                        ),
+
+                offsetY =
+                    (
+                            latestCalibrationState.offsetY +
+                                    deltaY
+                            )
+                        .coerceIn(
+                            CalibrationState.MIN_OFFSET,
+                            CalibrationState.MAX_OFFSET
+                        )
+            )
+        )
+    }
+
+    private fun resetCameraViewport() {
+        applyCalibrationState(
+            latestCalibrationState.copy(
+                /*
+                 * 70% gives us enough spare space
+                 * for the viewport trackpad to
+                 * immediately move the ellipse.
+                 */
+                compressionScale = 0.7f,
+                offsetX = 0f,
+                offsetY = 0f
+            )
+        )
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         displayManager = getSystemService(DisplayManager::class.java)
@@ -201,6 +274,27 @@ class MainActivity : ComponentActivity() {
                     },
                     onCursorClick = {
                         clickGlassesCursor()
+                    },
+                    onViewportPan = {
+                            deltaX,
+                            deltaY ->
+
+                        panCameraViewport(
+                            deltaX,
+                            deltaY
+                        )
+                    },
+
+                    onViewportScale = {
+                            scaleFactor ->
+
+                        scaleCameraViewport(
+                            scaleFactor
+                        )
+                    },
+
+                    onViewportReset = {
+                        resetCameraViewport()
                     },
                 )
             }

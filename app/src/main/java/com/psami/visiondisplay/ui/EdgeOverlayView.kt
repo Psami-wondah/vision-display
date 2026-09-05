@@ -8,15 +8,30 @@ import android.graphics.RectF
 import android.os.Looper
 import android.view.View
 import kotlin.math.min
+import kotlin.math.max
 
 class EdgeOverlayView(context: Context) : View(context) {
     private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val destination = RectF()
     private var edgeBitmap: Bitmap? = null
+    private var fillCenter = false
+
+
 
     init {
         visibility = GONE
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
+    fun setFillCenter(
+        enabled: Boolean
+    ) {
+        if (fillCenter == enabled) {
+            return
+        }
+
+        fillCenter = enabled
+        invalidate()
     }
 
     fun setEdgeEnhancementEnabled(enabled: Boolean) {
@@ -52,7 +67,24 @@ class EdgeOverlayView(context: Context) : View(context) {
         val bitmap = edgeBitmap ?: return
         if (bitmap.isRecycled || width == 0 || height == 0) return
 
-        val scale = min(width.toFloat() / bitmap.width, height.toFloat() / bitmap.height)
+        val scale =
+            if (fillCenter) {
+                max(
+                    width.toFloat() /
+                            bitmap.width,
+
+                    height.toFloat() /
+                            bitmap.height
+                )
+            } else {
+                min(
+                    width.toFloat() /
+                            bitmap.width,
+
+                    height.toFloat() /
+                            bitmap.height
+                )
+            }
         val renderedWidth = bitmap.width * scale
         val renderedHeight = bitmap.height * scale
         val left = (width - renderedWidth) / 2f
