@@ -1,19 +1,12 @@
 package com.psami.visiondisplay.ui.components
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -28,8 +21,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.psami.visiondisplay.data.CalibrationState
@@ -37,6 +28,8 @@ import com.psami.visiondisplay.data.CameraOption
 import com.psami.visiondisplay.data.ViewportShape
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.material3.Slider
+import com.psami.visiondisplay.data.ControllerPreferences
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,22 +47,12 @@ fun CalibrationControlPanel(
     selectedCameraId: String?,
     onCameraSelectionChange: (String?) -> Unit,
     onStateChange: (CalibrationState) -> Unit,
-    onCursorMove: (
-        deltaX: Float,
-        deltaY: Float
-    ) -> Unit,
-    onCursorClick: () -> Unit,
-    onViewportPan: (
-        deltaX: Float,
-        deltaY: Float
-    ) -> Unit,
-
-    onViewportScale: (
-        scaleFactor: Float
-    ) -> Unit,
-
-    onViewportReset: () -> Unit,
     onBackToControl: () -> Unit,
+    controllerPreferences:
+    ControllerPreferences,
+
+    onControllerPreferencesChange:
+        (ControllerPreferences) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -103,131 +86,132 @@ fun CalibrationControlPanel(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Card(
-                modifier = Modifier.fillMaxWidth()
+                modifier =
+                    Modifier.fillMaxWidth()
             ) {
+
                 Column(
-                    modifier = Modifier.padding(16.dp),
+                    modifier =
+                        Modifier.padding(
+                            16.dp
+                        ),
+
                     verticalArrangement =
-                        Arrangement.spacedBy(8.dp)
+                        Arrangement.spacedBy(
+                            12.dp
+                        )
                 ) {
+
                     Text(
-                        text = "Glasses pointer",
+                        text =
+                            "Controller",
+
                         style =
-                            MaterialTheme.typography.titleMedium
+                            MaterialTheme
+                                .typography
+                                .titleMedium
+                    )
+
+                    Row(
+                        modifier =
+                            Modifier.fillMaxWidth(),
+
+                        horizontalArrangement =
+                            Arrangement.SpaceBetween,
+
+                        verticalAlignment =
+                            Alignment.CenterVertically
+                    ) {
+
+                        Text(
+                            "Left-handed mode"
+                        )
+
+                        Switch(
+                            checked =
+                                controllerPreferences
+                                    .leftHandedMode,
+
+                            onCheckedChange = {
+                                    enabled ->
+
+                                onControllerPreferencesChange(
+                                    controllerPreferences.copy(
+                                        leftHandedMode =
+                                            enabled
+                                    )
+                                )
+                            }
+                        )
+                    }
+
+                    Text(
+                        text =
+                            "Pointer sensitivity: " +
+                                    "${
+                                        "%.1f".format(
+                                            controllerPreferences
+                                                .pointerSensitivity
+                                        )
+                                    }×"
+                    )
+
+                    Slider(
+                        value =
+                            controllerPreferences
+                                .pointerSensitivity,
+
+                        onValueChange = {
+                                sensitivity ->
+
+                            onControllerPreferencesChange(
+                                controllerPreferences.copy(
+                                    pointerSensitivity =
+                                        sensitivity
+                                )
+                            )
+                        },
+
+                        valueRange =
+                            ControllerPreferences
+                                .MIN_POINTER_SENSITIVITY..
+                                    ControllerPreferences
+                                        .MAX_POINTER_SENSITIVITY
                     )
 
                     Text(
                         text =
-                            "Drag here to move the pointer on the glasses.",
-                        style =
-                            MaterialTheme.typography.bodySmall
+                            "Viewport sensitivity: " +
+                                    "${
+                                        "%.1f".format(
+                                            controllerPreferences
+                                                .viewportSensitivity
+                                        )
+                                    }×"
                     )
 
-                    Box(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .height(220.dp)
-                                .background(
-                                    color =
-                                        MaterialTheme
-                                            .colorScheme
-                                            .surfaceVariant,
-                                    shape =
-                                        RoundedCornerShape(
-                                            12.dp
-                                        )
+                    Slider(
+                        value =
+                            controllerPreferences
+                                .viewportSensitivity,
+
+                        onValueChange = {
+                                sensitivity ->
+
+                            onControllerPreferencesChange(
+                                controllerPreferences.copy(
+                                    viewportSensitivity =
+                                        sensitivity
                                 )
-                                .pointerInput(Unit) {
+                            )
+                        },
 
-                                    awaitEachGesture {
-
-                                        val down =
-                                            awaitFirstDown(
-                                                requireUnconsumed = false
-                                            )
-
-                                        var previousPosition =
-                                            down.position
-
-                                        var totalMovement =
-                                            Offset.Zero
-
-                                        var isDragging =
-                                            false
-
-                                        while (true) {
-
-                                            val event =
-                                                awaitPointerEvent()
-
-                                            val change =
-                                                event.changes
-                                                    .firstOrNull {
-                                                        it.id == down.id
-                                                    }
-                                                    ?: break
-
-                                            /*
-                                             * Finger released.
-                                             */
-                                            if (!change.pressed) {
-
-                                                if (!isDragging) {
-                                                    onCursorClick()
-                                                }
-
-                                                break
-                                            }
-
-                                            val movement =
-                                                change.position -
-                                                        previousPosition
-
-                                            totalMovement +=
-                                                movement
-
-                                            /*
-                                             * Don't accidentally move the pointer
-                                             * when the user merely taps.
-                                             */
-                                            if (
-                                                !isDragging &&
-                                                totalMovement.getDistance() >
-                                                viewConfiguration.touchSlop
-                                            ) {
-                                                isDragging =
-                                                    true
-                                            }
-
-                                            if (isDragging) {
-
-                                                onCursorMove(
-                                                    movement.x,
-                                                    movement.y
-                                                )
-
-                                                change.consume()
-                                            }
-
-                                            previousPosition =
-                                                change.position
-                                        }
-                                    }
-                                }
-                    ) {
-                        Text(
-                            text = "Trackpad",
-                            modifier =
-                                Modifier.align(
-                                    Alignment.Center
-                                ),
-                            style =
-                                MaterialTheme
-                                    .typography
-                                    .bodyMedium
-                        )
-                    }
+                        valueRange =
+                            ControllerPreferences
+                                .MIN_VIEWPORT_SENSITIVITY..
+                                    ControllerPreferences
+                                        .MAX_VIEWPORT_SENSITIVITY
+                    )
                 }
             }
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -460,134 +444,7 @@ fun CalibrationControlPanel(
                 }
             }
 
-            Card(
-                modifier =
-                    Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier =
-                        Modifier.padding(16.dp),
-                    verticalArrangement =
-                        Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Camera viewport",
-                        style =
-                            MaterialTheme
-                                .typography
-                                .titleMedium
-                    )
 
-                    Text(
-                        text =
-                            "Drag to move the camera view. " +
-                                    "Pinch to resize it.",
-                        style =
-                            MaterialTheme
-                                .typography
-                                .bodySmall
-                    )
-
-                    Text(
-                        text =
-                            "Size: " +
-                                    "${(state.compressionScale * 100).toInt()}%  " +
-                                    "X: ${"%.2f".format(state.offsetX)}  " +
-                                    "Y: ${"%.2f".format(state.offsetY)}",
-                        style =
-                            MaterialTheme
-                                .typography
-                                .bodySmall
-                    )
-
-                    Box(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .height(220.dp)
-                                .background(
-                                    color =
-                                        MaterialTheme
-                                            .colorScheme
-                                            .surfaceVariant,
-
-                                    shape =
-                                        RoundedCornerShape(
-                                            12.dp
-                                        )
-                                )
-                                .pointerInput(Unit) {
-
-                                    detectTransformGestures(
-                                        panZoomLock = true
-                                    ) { _,
-                                        pan,
-                                        zoom,
-                                        _ ->
-
-                                        /*
-                                         * Convert movement on the
-                                         * phone pad into -1..+1
-                                         * viewport coordinates.
-                                         */
-                                        if (
-                                            size.width > 0 &&
-                                            size.height > 0
-                                        ) {
-                                            onViewportPan(
-                                                (pan.x /
-                                                        size.width) *
-                                                        2f,
-
-                                                (pan.y /
-                                                        size.height) *
-                                                        2f
-                                            )
-                                        }
-
-                                        /*
-                                         * Pinch apart:
-                                         * viewport gets larger.
-                                         *
-                                         * Pinch together:
-                                         * viewport gets smaller.
-                                         */
-                                        if (
-                                            zoom.isFinite() &&
-                                            zoom > 0f &&
-                                            zoom != 1f
-                                        ) {
-                                            onViewportScale(
-                                                zoom
-                                            )
-                                        }
-                                    }
-                                }
-                    ) {
-                        Text(
-                            text =
-                                "Move / pinch",
-                            modifier =
-                                Modifier.align(
-                                    Alignment.Center
-                                ),
-                            style =
-                                MaterialTheme
-                                    .typography
-                                    .bodyMedium
-                        )
-                    }
-
-                    OutlinedButton(
-                        onClick =
-                            onViewportReset
-                    ) {
-                        Text(
-                            "Reset viewport"
-                        )
-                    }
-                }
-            }
             Card(modifier = Modifier.fillMaxWidth()) {
                 Row(
                     modifier = Modifier

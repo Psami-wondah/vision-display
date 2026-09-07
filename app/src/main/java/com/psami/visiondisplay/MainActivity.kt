@@ -6,8 +6,10 @@ import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.Display
+import android.view.MotionEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -15,25 +17,28 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import com.psami.visiondisplay.data.CalibrationState
 import com.psami.visiondisplay.data.CalibrationStore
 import com.psami.visiondisplay.data.CameraOption
+import com.psami.visiondisplay.data.ControllerPreferences
+import com.psami.visiondisplay.data.ControllerPreferencesStore
 import com.psami.visiondisplay.ui.CameraXController
 import com.psami.visiondisplay.ui.GlassesPresentationDialog
 import com.psami.visiondisplay.ui.GlassesRenderTarget
+import com.psami.visiondisplay.ui.HapticController
 import com.psami.visiondisplay.ui.components.CalibrationControlPanel
-import com.psami.visiondisplay.ui.theme.VisionDisplayTheme
-import android.os.SystemClock
-import android.view.MotionEvent
-import androidx.compose.runtime.saveable.rememberSaveable
 import com.psami.visiondisplay.ui.components.EyesFreeControlPanel
+import com.psami.visiondisplay.ui.theme.VisionDisplayTheme
 
 class MainActivity : ComponentActivity() {
     private lateinit var displayManager: DisplayManager
     private lateinit var cameraController: CameraXController
+    private lateinit var hapticController: HapticController
+
 
     private var glassesPresentation: GlassesPresentationDialog? = null
     private var renderTarget: GlassesRenderTarget? = null
@@ -45,6 +50,9 @@ class MainActivity : ComponentActivity() {
     private var permissionRequestAttempted by mutableStateOf(false)
     private var isExternalDisplayConnected by mutableStateOf(false)
     private var cameraOptions by mutableStateOf<List<CameraOption>>(emptyList())
+    private var controllerPreferences by mutableStateOf(
+        ControllerPreferences()
+    )
 
     /*
      * null = Auto
@@ -146,12 +154,16 @@ class MainActivity : ComponentActivity() {
         deltaX: Float,
         deltaY: Float
     ) {
+        val sensitivity =
+            controllerPreferences
+                .viewportSensitivity
+
         applyCalibrationState(
             latestCalibrationState.copy(
                 offsetX =
                     (
                             latestCalibrationState.offsetX +
-                                    deltaX
+                                    deltaX * sensitivity
                             )
                         .coerceIn(
                             CalibrationState.MIN_OFFSET,
@@ -161,7 +173,7 @@ class MainActivity : ComponentActivity() {
                 offsetY =
                     (
                             latestCalibrationState.offsetY +
-                                    deltaY
+                                    deltaY * sensitivity
                             )
                         .coerceIn(
                             CalibrationState.MIN_OFFSET,
@@ -170,7 +182,6 @@ class MainActivity : ComponentActivity() {
             )
         )
     }
-
     private fun resetCameraViewport() {
         applyCalibrationState(
             latestCalibrationState.copy(
@@ -186,9 +197,46 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun updateControllerPreferences(
+        newPreferences: ControllerPreferences
+    ) {
+        controllerPreferences =
+            newPreferences.normalized()
+
+        ControllerPreferencesStore.save(
+            this,
+            controllerPreferences
+        )
+    }
+
+    private fun updateScreenWakeState(
+        keepAwake: Boolean
+    ) {
+        if (
+            keepAwake
+        ) {
+            window.addFlags(
+                WindowManager.LayoutParams
+                    .FLAG_KEEP_SCREEN_ON
+            )
+        } else {
+            window.clearFlags(
+                WindowManager.LayoutParams
+                    .FLAG_KEEP_SCREEN_ON
+            )
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         displayManager = getSystemService(DisplayManager::class.java)
+        controllerPreferences =
+            ControllerPreferencesStore.load(
+                this
+            )
+
+
+        hapticController = HapticController(this)
         cameraController = CameraXController(
             context = applicationContext,
             onCameraDiagnosticsChanged = { diagnostics ->
@@ -276,15 +324,41 @@ class MainActivity : ComponentActivity() {
                         onStateChange = { requestedState ->
                             applyCalibrationState(requestedState)
                         },
-                        onCursorMove = { deltaX, deltaY ->
+                        onBackToControl = {
+                            showSettingsPanel =
+                                false
+                        },
+                        controllerPreferences =
+                            controllerPreferences,
+
+                        onControllerPreferencesChange = {
+                                preferences ->
+
+                            updateControllerPreferences(
+                                preferences
+                            )
+                        },
+                    )
+
+                } else {
+
+                    EyesFreeControlPanel(
+                        isExternalDisplayConnected =
+                            isExternalDisplayConnected,
+
+                        onCursorMove = { deltaX,
+                                         deltaY ->
+
                             moveGlassesCursor(
                                 deltaX,
                                 deltaY
                             )
                         },
+
                         onCursorClick = {
                             clickGlassesCursor()
                         },
+
                         onViewportPan = { deltaX,
                                           deltaY ->
 
@@ -304,63 +378,21 @@ class MainActivity : ComponentActivity() {
                         onViewportReset = {
                             resetCameraViewport()
                         },
-                        onBackToControl = {
-                            showSettingsPanel =
-                                false
-                        },
-                    )
-
-                }else {
-
-                    EyesFreeControlPanel(
-                        isExternalDisplayConnected =
-                            isExternalDisplayConnected,
-
-                        onCursorMove = {
-                                deltaX,
-                                deltaY ->
-
-                            moveGlassesCursor(
-                                deltaX,
-                                deltaY
-                            )
-                        },
-
-                        onCursorClick = {
-                            clickGlassesCursor()
-                        },
-
-                        onViewportPan = {
-                                deltaX,
-                                deltaY ->
-
-                            panCameraViewport(
-                                deltaX,
-                                deltaY
-                            )
-                        },
-
-                        onViewportScale = {
-                                scaleFactor ->
-
-                            scaleCameraViewport(
-                                scaleFactor
-                            )
-                        },
-
-                        onViewportReset = {
-                            resetCameraViewport()
-                        },
 
                         onOpenSettings = {
                             showSettingsPanel =
                                 true
-                        }
+                        },
+                        leftHandedMode =
+                            controllerPreferences
+                                .leftHandedMode,
                     )
                 }
             }
         }
     }
+
+
 
     override fun onStart() {
         super.onStart()
@@ -455,6 +487,9 @@ class MainActivity : ComponentActivity() {
                 cameraController.refreshDiagnostics(
                     selectedCameraId
                 )
+                updateScreenWakeState(
+                    false
+                )
             }
         }
         glassesPresentation = presentation
@@ -464,12 +499,18 @@ class MainActivity : ComponentActivity() {
             presentation.show()
             presentation.updateState(latestCalibrationState)
             isExternalDisplayConnected = true
+            updateScreenWakeState(
+                true
+            )
         } catch (_: WindowManager.InvalidDisplayException) {
             glassesPresentation = null
             renderTarget = null
             isExternalDisplayConnected = false
             cameraController.stop()
             runtimeError = "The external display disconnected before it could be opened."
+            updateScreenWakeState(
+                false
+            )
         }
     }
 
@@ -481,6 +522,9 @@ class MainActivity : ComponentActivity() {
         cameraController.stop()
         cameraController.refreshDiagnostics(
             selectedCameraId
+        )
+        updateScreenWakeState(
+            false
         )
         displayDiagnostics = "Waiting for external display…"
         presentation?.setOnDismissListener(null)
@@ -570,6 +614,8 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+
+
     private fun moveGlassesCursor(
         deltaX: Float,
         deltaY: Float
@@ -578,7 +624,9 @@ class MainActivity : ComponentActivity() {
             renderTarget
                 ?: return
 
-        val sensitivity = 1.8f
+        val sensitivity =
+            controllerPreferences
+                .pointerSensitivity
 
         target.cursorOverlayView.moveBy(
             deltaX = deltaX * sensitivity,

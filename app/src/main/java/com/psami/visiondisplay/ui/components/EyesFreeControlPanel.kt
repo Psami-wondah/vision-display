@@ -27,9 +27,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -49,10 +48,11 @@ fun EyesFreeControlPanel(
     ) -> Unit,
     onViewportReset: () -> Unit,
     onOpenSettings: () -> Unit,
+    leftHandedMode: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val haptics =
-        LocalHapticFeedback.current
+
+
 
     Column(
         modifier =
@@ -125,57 +125,75 @@ fun EyesFreeControlPanel(
                     .weight(1f),
 
             horizontalArrangement =
-                Arrangement.spacedBy(12.dp)
+                Arrangement.spacedBy(
+                    12.dp
+                )
         ) {
 
-            /*
-             * LEFT HALF:
-             * glasses pointer.
-             */
-            PointerControlPad(
-                onCursorMove =
-                    onCursorMove,
+            if (
+                leftHandedMode
+            ) {
 
-                onCursorClick = {
+                ViewportControlPad(
+                    onViewportPan =
+                        onViewportPan,
 
-                    haptics.performHapticFeedback(
-                        HapticFeedbackType.LongPress
-                    )
+                    onViewportScale =
+                        onViewportScale,
 
-                    onCursorClick()
-                },
+                    onViewportReset =
+                        onViewportReset,
 
-                modifier =
-                    Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-            )
+                    modifier =
+                        Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                )
 
-            /*
-             * RIGHT HALF:
-             * camera viewport.
-             */
-            ViewportControlPad(
-                onViewportPan =
-                    onViewportPan,
+                PointerControlPad(
+                    onCursorMove =
+                        onCursorMove,
 
-                onViewportScale =
-                    onViewportScale,
+                    onCursorClick =
+                        onCursorClick,
 
-                onViewportReset = {
+                    modifier =
+                        Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                )
 
-                    haptics.performHapticFeedback(
-                        HapticFeedbackType.LongPress
-                    )
+            } else {
 
-                    onViewportReset()
-                },
+                PointerControlPad(
+                    onCursorMove =
+                        onCursorMove,
 
-                modifier =
-                    Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-            )
+                    onCursorClick =
+                        onCursorClick,
+
+                    modifier =
+                        Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                )
+
+                ViewportControlPad(
+                    onViewportPan =
+                        onViewportPan,
+
+                    onViewportScale =
+                        onViewportScale,
+
+                    onViewportReset =
+                        onViewportReset,
+
+                    modifier =
+                        Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                )
+            }
         }
     }
 }
@@ -382,6 +400,13 @@ private fun ViewportControlPad(
                     Modifier
                         .fillMaxWidth()
                         .weight(1f)
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onDoubleTap = {
+                                    onViewportReset()
+                                }
+                            )
+                        }
                         .pointerInput(Unit) {
 
                             detectTransformGestures(
