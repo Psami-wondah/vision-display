@@ -28,6 +28,8 @@ import com.psami.visiondisplay.ui.components.CalibrationControlPanel
 import com.psami.visiondisplay.ui.theme.VisionDisplayTheme
 import android.os.SystemClock
 import android.view.MotionEvent
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.psami.visiondisplay.ui.components.EyesFreeControlPanel
 
 class MainActivity : ComponentActivity() {
     private lateinit var displayManager: DisplayManager
@@ -221,6 +223,10 @@ class MainActivity : ComponentActivity() {
 
         setContent {
 
+            var showSettingsPanel by
+            rememberSaveable {
+                mutableStateOf(false)
+            }
             val shouldOpenSettings = !hasCameraPermission &&
                     permissionRequestAttempted &&
                     !shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)
@@ -232,71 +238,126 @@ class MainActivity : ComponentActivity() {
             }
 
             VisionDisplayTheme {
-                CalibrationControlPanel(
-                    state = latestCalibrationState,
-                    hasCameraPermission = hasCameraPermission,
-                    isExternalDisplayConnected = isExternalDisplayConnected,
-                    displayDiagnostics = displayDiagnostics,
-                    cameraOptions = cameraOptions,
-                    selectedCameraId = selectedCameraId,
-                    cameraDiagnostics = cameraDiagnostics,
-                    runtimeError = runtimeError,
-                    cameraPermissionActionLabel = if (shouldOpenSettings) {
-                        "Open app settings"
-                    } else {
-                        "Grant camera permission"
-                    },
-                    onCameraPermissionAction = {
-                        if (shouldOpenSettings) openAppSettings() else requestCameraPermission()
-                    },
-                    onRetry = {
-                        runtimeError = null
-                        cameraController.stop()
-                        synchronizePresentation()
-                        synchronizeCamera()
-                    },
-                    onCameraSelectionChange = { cameraId ->
-                        if (cameraId != selectedCameraId) {
-                            selectedCameraId = cameraId
+                if (
+                    showSettingsPanel
+                ) {
+
+                    CalibrationControlPanel(
+                        state = latestCalibrationState,
+                        hasCameraPermission = hasCameraPermission,
+                        isExternalDisplayConnected = isExternalDisplayConnected,
+                        displayDiagnostics = displayDiagnostics,
+                        cameraOptions = cameraOptions,
+                        selectedCameraId = selectedCameraId,
+                        cameraDiagnostics = cameraDiagnostics,
+                        runtimeError = runtimeError,
+                        cameraPermissionActionLabel = if (shouldOpenSettings) {
+                            "Open app settings"
+                        } else {
+                            "Grant camera permission"
+                        },
+                        onCameraPermissionAction = {
+                            if (shouldOpenSettings) openAppSettings() else requestCameraPermission()
+                        },
+                        onRetry = {
                             runtimeError = null
-
+                            cameraController.stop()
+                            synchronizePresentation()
                             synchronizeCamera()
+                        },
+                        onCameraSelectionChange = { cameraId ->
+                            if (cameraId != selectedCameraId) {
+                                selectedCameraId = cameraId
+                                runtimeError = null
+
+                                synchronizeCamera()
+                            }
+                        },
+                        onStateChange = { requestedState ->
+                            applyCalibrationState(requestedState)
+                        },
+                        onCursorMove = { deltaX, deltaY ->
+                            moveGlassesCursor(
+                                deltaX,
+                                deltaY
+                            )
+                        },
+                        onCursorClick = {
+                            clickGlassesCursor()
+                        },
+                        onViewportPan = { deltaX,
+                                          deltaY ->
+
+                            panCameraViewport(
+                                deltaX,
+                                deltaY
+                            )
+                        },
+
+                        onViewportScale = { scaleFactor ->
+
+                            scaleCameraViewport(
+                                scaleFactor
+                            )
+                        },
+
+                        onViewportReset = {
+                            resetCameraViewport()
+                        },
+                        onBackToControl = {
+                            showSettingsPanel =
+                                false
+                        },
+                    )
+
+                }else {
+
+                    EyesFreeControlPanel(
+                        isExternalDisplayConnected =
+                            isExternalDisplayConnected,
+
+                        onCursorMove = {
+                                deltaX,
+                                deltaY ->
+
+                            moveGlassesCursor(
+                                deltaX,
+                                deltaY
+                            )
+                        },
+
+                        onCursorClick = {
+                            clickGlassesCursor()
+                        },
+
+                        onViewportPan = {
+                                deltaX,
+                                deltaY ->
+
+                            panCameraViewport(
+                                deltaX,
+                                deltaY
+                            )
+                        },
+
+                        onViewportScale = {
+                                scaleFactor ->
+
+                            scaleCameraViewport(
+                                scaleFactor
+                            )
+                        },
+
+                        onViewportReset = {
+                            resetCameraViewport()
+                        },
+
+                        onOpenSettings = {
+                            showSettingsPanel =
+                                true
                         }
-                    },
-                    onStateChange = { requestedState ->
-                        applyCalibrationState(requestedState)
-                    },
-                    onCursorMove = { deltaX, deltaY ->
-                        moveGlassesCursor(
-                            deltaX,
-                            deltaY
-                        )
-                    },
-                    onCursorClick = {
-                        clickGlassesCursor()
-                    },
-                    onViewportPan = {
-                            deltaX,
-                            deltaY ->
-
-                        panCameraViewport(
-                            deltaX,
-                            deltaY
-                        )
-                    },
-
-                    onViewportScale = {
-                            scaleFactor ->
-
-                        scaleCameraViewport(
-                            scaleFactor
-                        )
-                    },
-
-                    onViewportReset = {
-                        resetCameraViewport()
-                    },
-                )
+                    )
+                }
             }
         }
     }

@@ -1,6 +1,7 @@
 package com.psami.visiondisplay.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -33,8 +34,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.psami.visiondisplay.data.CalibrationState
 import com.psami.visiondisplay.data.CameraOption
-import androidx.compose.foundation.clickable
 import com.psami.visiondisplay.data.ViewportShape
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -67,10 +69,31 @@ fun CalibrationControlPanel(
     ) -> Unit,
 
     onViewportReset: () -> Unit,
+    onBackToControl: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Vision Assist Calibration") }) }
+        contentWindowInsets = WindowInsets.safeDrawing,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        "Vision Assist Settings"
+                    )
+                },
+
+                navigationIcon = {
+                    Button(
+                        onClick =
+                            onBackToControl
+                    ) {
+                        Text(
+                            "Control"
+                        )
+                    }
+                }
+            )
+        }
     ) { innerPadding ->
         Column(
             modifier = modifier
@@ -392,8 +415,7 @@ fun CalibrationControlPanel(
                                     to "Rectangle"
                         )
 
-                    shapes.forEach {
-                            (shape, label) ->
+                    shapes.forEach { (shape, label) ->
 
                         Row(
                             modifier =
