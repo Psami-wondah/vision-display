@@ -17,6 +17,10 @@ object ControllerPreferencesStore {
     private const val KEY_VIEWPORT_SENSITIVITY =
         "viewport_sensitivity"
 
+
+    private const val KEY_SPOKEN_FEEDBACK =
+        "spoken_feedback"
+
     fun load(
         context: Context
     ): ControllerPreferences {
@@ -44,6 +48,11 @@ object ControllerPreferencesStore {
                 preferences.getFloat(
                     KEY_VIEWPORT_SENSITIVITY,
                     1f
+                ),
+            spokenFeedbackEnabled =
+                preferences.getBoolean(
+                    KEY_SPOKEN_FEEDBACK,
+                    true
                 )
         ).normalized()
     }
@@ -76,6 +85,11 @@ object ControllerPreferencesStore {
                 putFloat(
                     KEY_VIEWPORT_SENSITIVITY,
                     normalized.viewportSensitivity
+                )
+
+                putBoolean(
+                    KEY_SPOKEN_FEEDBACK,
+                    normalized.spokenFeedbackEnabled
                 )
             }
     }

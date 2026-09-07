@@ -3,7 +3,8 @@ package com.psami.visiondisplay.data
 data class ControllerPreferences(
     val leftHandedMode: Boolean = false,
     val pointerSensitivity: Float = 1.8f,
-    val viewportSensitivity: Float = 1.0f
+    val viewportSensitivity: Float = 1.0f,
+    val spokenFeedbackEnabled: Boolean = true
 ) {
     fun normalized(): ControllerPreferences =
         copy(

@@ -145,6 +145,55 @@ fun CalibrationControlPanel(
                         )
                     }
 
+                    Row(
+                        modifier =
+                            Modifier.fillMaxWidth(),
+
+                        horizontalArrangement =
+                            Arrangement.SpaceBetween,
+
+                        verticalAlignment =
+                            Alignment.CenterVertically
+                    ) {
+
+                        Column(
+                            modifier =
+                                Modifier.weight(1f)
+                        ) {
+
+                            Text(
+                                text =
+                                    "Spoken feedback"
+                            )
+
+                            Text(
+                                text =
+                                    "Announce important control changes.",
+                                style =
+                                    MaterialTheme
+                                        .typography
+                                        .bodySmall
+                            )
+                        }
+
+                        Switch(
+                            checked =
+                                controllerPreferences
+                                    .spokenFeedbackEnabled,
+
+                            onCheckedChange = {
+                                    enabled ->
+
+                                onControllerPreferencesChange(
+                                    controllerPreferences.copy(
+                                        spokenFeedbackEnabled =
+                                            enabled
+                                    )
+                                )
+                            }
+                        )
+                    }
+
                     Text(
                         text =
                             "Pointer sensitivity: " +

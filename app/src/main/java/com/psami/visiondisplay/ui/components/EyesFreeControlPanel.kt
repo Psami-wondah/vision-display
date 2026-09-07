@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -384,7 +383,7 @@ private fun ViewportControlPad(
             2.dp
     ) {
 
-        Column(
+        Box(
             modifier =
                 Modifier
                     .fillMaxSize()
@@ -393,128 +392,97 @@ private fun ViewportControlPad(
                             .colorScheme
                             .surfaceVariant
                     )
-        ) {
-
-            Box(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .pointerInput(Unit) {
-                            detectTapGestures(
-                                onDoubleTap = {
-                                    onViewportReset()
-                                }
-                            )
-                        }
-                        .pointerInput(Unit) {
-
-                            detectTransformGestures(
-                                panZoomLock =
-                                    true
-                            ) { _,
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onDoubleTap = {
+                                onViewportReset()
+                            }
+                        )
+                    }
+                    .pointerInput(Unit) {
+                        detectTransformGestures(
+                            panZoomLock = true
+                        ) {
+                                _,
                                 pan,
                                 zoom,
                                 _ ->
 
-                                if (
-                                    size.width > 0 &&
-                                    size.height > 0
-                                ) {
+                            if (
+                                size.width > 0 &&
+                                size.height > 0
+                            ) {
+                                onViewportPan(
+                                    (
+                                            pan.x /
+                                                    size.width
+                                            ) * 2f,
 
-                                    onViewportPan(
-                                        (
-                                                pan.x /
-                                                        size.width
-                                                ) *
-                                                2f,
+                                    (
+                                            pan.y /
+                                                    size.height
+                                            ) * 2f
+                                )
+                            }
 
-                                        (
-                                                pan.y /
-                                                        size.height
-                                                ) *
-                                                2f
-                                    )
-                                }
-
-                                if (
-                                    zoom.isFinite() &&
-                                    zoom > 0f &&
-                                    zoom != 1f
-                                ) {
-
-                                    onViewportScale(
-                                        zoom
-                                    )
-                                }
+                            if (
+                                zoom.isFinite() &&
+                                zoom > 0f &&
+                                zoom != 1f
+                            ) {
+                                onViewportScale(
+                                    zoom
+                                )
                             }
                         }
-            ) {
+                    }
+        ) {
 
-                Column(
-                    modifier =
-                        Modifier.align(
-                            Alignment.Center
-                        ),
-
-                    horizontalAlignment =
-                        Alignment.CenterHorizontally,
-
-                    verticalArrangement =
-                        Arrangement.spacedBy(
-                            8.dp
-                        )
-                ) {
-
-                    Text(
-                        text = "VIEWPORT",
-                        style =
-                            MaterialTheme
-                                .typography
-                                .headlineMedium
-                    )
-
-                    Text(
-                        text =
-                            "Drag to move",
-
-                        style =
-                            MaterialTheme
-                                .typography
-                                .bodyLarge
-                    )
-
-                    Text(
-                        text =
-                            "Pinch to resize",
-
-                        style =
-                            MaterialTheme
-                                .typography
-                                .bodyLarge
-                    )
-                }
-            }
-
-            Button(
-                onClick =
-                    onViewportReset,
-
+            Column(
                 modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp)
-                        .height(60.dp)
+                    Modifier.align(
+                        Alignment.Center
+                    ),
+
+                horizontalAlignment =
+                    Alignment.CenterHorizontally,
+
+                verticalArrangement =
+                    Arrangement.spacedBy(
+                        8.dp
+                    )
             ) {
 
                 Text(
-                    text =
-                        "RESET VIEWPORT",
-
+                    text = "VIEWPORT",
                     style =
                         MaterialTheme
                             .typography
-                            .titleMedium
+                            .headlineMedium
+                )
+
+                Text(
+                    text = "Drag to move",
+                    style =
+                        MaterialTheme
+                            .typography
+                            .bodyLarge
+                )
+
+                Text(
+                    text = "Pinch to resize",
+                    style =
+                        MaterialTheme
+                            .typography
+                            .bodyLarge
+                )
+
+                Text(
+                    text = "Double tap to reset",
+                    style =
+                        MaterialTheme
+                            .typography
+                            .bodyMedium
                 )
             }
         }

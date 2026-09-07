@@ -33,12 +33,15 @@ import com.psami.visiondisplay.ui.HapticController
 import com.psami.visiondisplay.ui.components.CalibrationControlPanel
 import com.psami.visiondisplay.ui.components.EyesFreeControlPanel
 import com.psami.visiondisplay.ui.theme.VisionDisplayTheme
+import com.psami.visiondisplay.ui.SpeechController
+import com.psami.visiondisplay.data.ViewportShape
 
 class MainActivity : ComponentActivity() {
     private lateinit var displayManager: DisplayManager
     private lateinit var cameraController: CameraXController
     private lateinit var hapticController: HapticController
-
+    private lateinit var speechController:
+            SpeechController
 
     private var glassesPresentation: GlassesPresentationDialog? = null
     private var renderTarget: GlassesRenderTarget? = null
@@ -111,7 +114,8 @@ class MainActivity : ComponentActivity() {
             cameraOptions[nextIndex].id
 
         runtimeError = null
-
+        hapticController.confirm()
+        announceSelectedCamera()
         synchronizeCamera()
     }
 
@@ -227,6 +231,42 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun announceSelectedCamera() {
+        val label =
+            if (
+                selectedCameraId == null
+            ) {
+                "Auto camera"
+            } else {
+                cameraOptions
+                    .firstOrNull {
+                        it.id ==
+                                selectedCameraId
+                    }
+                    ?.label
+                    ?: "Camera changed"
+            }
+
+        speakFeedback(
+            label
+        )
+    }
+
+    private fun speakFeedback(
+        text: String
+    ) {
+        if (
+            !controllerPreferences
+                .spokenFeedbackEnabled
+        ) {
+            return
+        }
+
+        speechController.speak(
+            text
+        )
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         displayManager = getSystemService(DisplayManager::class.java)
@@ -237,6 +277,8 @@ class MainActivity : ComponentActivity() {
 
 
         hapticController = HapticController(this)
+        speechController =
+            SpeechController(this)
         cameraController = CameraXController(
             context = applicationContext,
             onCameraDiagnosticsChanged = { diagnostics ->
@@ -318,6 +360,8 @@ class MainActivity : ComponentActivity() {
                                 selectedCameraId = cameraId
                                 runtimeError = null
 
+                                announceSelectedCamera()
+
                                 synchronizeCamera()
                             }
                         },
@@ -356,6 +400,7 @@ class MainActivity : ComponentActivity() {
                         },
 
                         onCursorClick = {
+                            hapticController.click()
                             clickGlassesCursor()
                         },
 
@@ -376,7 +421,11 @@ class MainActivity : ComponentActivity() {
                         },
 
                         onViewportReset = {
+                            hapticController.reset()
                             resetCameraViewport()
+                            speakFeedback(
+                                "Viewport centred"
+                            )
                         },
 
                         onOpenSettings = {
@@ -424,6 +473,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         dismissPresentation()
         cameraController.close()
+        speechController.close()
         super.onDestroy()
     }
 
@@ -469,6 +519,7 @@ class MainActivity : ComponentActivity() {
             },
             onToggleEdgeEnhancement = {
                 toggleEdgeEnhancement()
+
             },
             onCycleCamera = {
                 cycleCamera()
@@ -584,6 +635,8 @@ class MainActivity : ComponentActivity() {
     private fun applyCalibrationState(
         requestedState: CalibrationState
     ) {
+        val previousState =
+            latestCalibrationState
         val newState =
             requestedState.normalized()
 
@@ -602,6 +655,51 @@ class MainActivity : ComponentActivity() {
             .setEdgeEnhancementEnabled(
                 newState.isEdgeEnhancementEnabled
             )
+
+        /*
+     * Only announce discrete state changes.
+     * Do not announce pan/scale changes.
+     */
+        if (
+            previousState
+                .isEdgeEnhancementEnabled !=
+            newState
+                .isEdgeEnhancementEnabled
+        ) {
+            speakFeedback(
+                if (
+                    newState
+                        .isEdgeEnhancementEnabled
+                ) {
+                    "Edges on"
+                } else {
+                    "Edges off"
+                }
+            )
+        }
+
+        if (
+            previousState.viewportShape !=
+            newState.viewportShape
+        ) {
+            val shapeName =
+                when (
+                    newState.viewportShape
+                ) {
+                    ViewportShape.CIRCLE ->
+                        "Circle"
+
+                    ViewportShape.WIDE_ELLIPSE ->
+                        "Wide ellipse"
+
+                    ViewportShape.RECTANGLE ->
+                        "Rectangle"
+                }
+
+            speakFeedback(
+                shapeName
+            )
+        }
     }
 
     private fun toggleEdgeEnhancement() {
@@ -612,6 +710,7 @@ class MainActivity : ComponentActivity() {
                         .isEdgeEnhancementEnabled
             )
         )
+        hapticController.confirm()
     }
 
 
