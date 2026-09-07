@@ -3,9 +3,12 @@ package com.psami.visiondisplay.ui
 import android.content.Context
 import android.speech.tts.TextToSpeech
 import java.util.Locale
+import android.speech.tts.UtteranceProgressListener
 
 class SpeechController(
-    context: Context
+    context: Context,
+    private val onSpeakingChanged:
+        (Boolean) -> Unit
 ) : TextToSpeech.OnInitListener,
     AutoCloseable {
 
@@ -63,6 +66,47 @@ class SpeechController(
             1.0f
         )
 
+        tts.setOnUtteranceProgressListener(
+            object :
+                UtteranceProgressListener() {
+
+                override fun onStart(
+                    utteranceId: String?
+                ) {
+                    onSpeakingChanged(
+                        true
+                    )
+                }
+
+                override fun onDone(
+                    utteranceId: String?
+                ) {
+                    onSpeakingChanged(
+                        false
+                    )
+                }
+
+                @Deprecated(
+                    "Deprecated by Android"
+                )
+                override fun onError(
+                    utteranceId: String?
+                ) {
+                    onSpeakingChanged(
+                        false
+                    )
+                }
+
+                override fun onError(
+                    utteranceId: String?,
+                    errorCode: Int
+                ) {
+                    onSpeakingChanged(
+                        false
+                    )
+                }
+            }
+        )
         isReady =
             true
 
@@ -108,6 +152,9 @@ class SpeechController(
 
     fun stop() {
         textToSpeech?.stop()
+        onSpeakingChanged(
+            false
+        )
     }
 
     override fun close() {
@@ -122,6 +169,9 @@ class SpeechController(
 
         textToSpeech =
             null
+        onSpeakingChanged(
+            false
+        )
     }
 
     private companion object {

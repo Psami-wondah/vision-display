@@ -26,15 +26,15 @@ import com.psami.visiondisplay.data.CalibrationStore
 import com.psami.visiondisplay.data.CameraOption
 import com.psami.visiondisplay.data.ControllerPreferences
 import com.psami.visiondisplay.data.ControllerPreferencesStore
+import com.psami.visiondisplay.data.ViewportShape
 import com.psami.visiondisplay.ui.CameraXController
 import com.psami.visiondisplay.ui.GlassesPresentationDialog
 import com.psami.visiondisplay.ui.GlassesRenderTarget
 import com.psami.visiondisplay.ui.HapticController
+import com.psami.visiondisplay.ui.SpeechController
 import com.psami.visiondisplay.ui.components.CalibrationControlPanel
 import com.psami.visiondisplay.ui.components.EyesFreeControlPanel
 import com.psami.visiondisplay.ui.theme.VisionDisplayTheme
-import com.psami.visiondisplay.ui.SpeechController
-import com.psami.visiondisplay.data.ViewportShape
 
 class MainActivity : ComponentActivity() {
     private lateinit var displayManager: DisplayManager
@@ -56,7 +56,11 @@ class MainActivity : ComponentActivity() {
     private var controllerPreferences by mutableStateOf(
         ControllerPreferences()
     )
+    private var isTextRecognitionInProgress by
+    mutableStateOf(false)
 
+    private var isSpeechActive by
+    mutableStateOf(false)
     /*
      * null = Auto
      */
@@ -186,6 +190,7 @@ class MainActivity : ComponentActivity() {
             )
         )
     }
+
     private fun resetCameraViewport() {
         applyCalibrationState(
             latestCalibrationState.copy(
@@ -267,6 +272,57 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun requestTextRecognition() {
+
+        if (
+            isSpeechActive
+        ) {
+            speechController.stop()
+        }
+
+        if (
+            isTextRecognitionInProgress
+        ) {
+            return
+        }
+
+        val accepted =
+            cameraController
+                .requestTextRecognition()
+
+        if (
+            !accepted
+        ) {
+            hapticController.reset()
+
+            speakFeedback(
+                "Camera not ready"
+            )
+
+            return
+        }
+
+        renderTarget
+            ?.ocrOverlayView
+            ?.clear()
+
+        isTextRecognitionInProgress =
+            true
+
+        hapticController.confirm()
+
+        speakFeedback(
+            "Reading text"
+        )
+    }
+
+    private fun stopReadingText() {
+
+        speechController.stop()
+
+        hapticController.click()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         displayManager = getSystemService(DisplayManager::class.java)
@@ -278,7 +334,17 @@ class MainActivity : ComponentActivity() {
 
         hapticController = HapticController(this)
         speechController =
-            SpeechController(this)
+            SpeechController(
+                context = this,
+                onSpeakingChanged = {
+                        speaking ->
+
+                    runOnUiThread {
+                        isSpeechActive =
+                            speaking
+                    }
+                }
+            )
         cameraController = CameraXController(
             context = applicationContext,
             onCameraDiagnosticsChanged = { diagnostics ->
@@ -299,7 +365,55 @@ class MainActivity : ComponentActivity() {
                 ) {
                     selectedCameraId = null
                 }
+            },
+            onTextRecognized = {
+                    result ->
+
+                isTextRecognitionInProgress =
+                    false
+
+                /*
+                 * Put the individual text regions
+                 * onto the glasses.
+                 */
+                renderTarget
+                    ?.ocrOverlayView
+                    ?.submit(
+                        result
+                    )
+
+                if (
+                    result.fullText.isBlank()
+                ) {
+                    hapticController.reset()
+
+                    speechController.speak(
+                        "No text found"
+                    )
+                } else {
+                    hapticController.confirm()
+
+                    speechController.speak(
+                        result.fullText
+                    )
+                }
+            },
+
+            onTextRecognitionError = { message ->
+
+                isTextRecognitionInProgress =
+                    false
+
+                runtimeError =
+                    message
+
+                hapticController.reset()
+
+                speechController.speak(
+                    "Unable to read text"
+                )
             }
+
         )
 
         cameraController.refreshCameraOptions()
@@ -375,8 +489,7 @@ class MainActivity : ComponentActivity() {
                         controllerPreferences =
                             controllerPreferences,
 
-                        onControllerPreferencesChange = {
-                                preferences ->
+                        onControllerPreferencesChange = { preferences ->
 
                             updateControllerPreferences(
                                 preferences
@@ -435,12 +548,22 @@ class MainActivity : ComponentActivity() {
                         leftHandedMode =
                             controllerPreferences
                                 .leftHandedMode,
+                        isTextRecognitionInProgress =
+                            isTextRecognitionInProgress,
+
+                        onReadText = {
+                            requestTextRecognition()
+                        },
+                        isSpeechActive =
+                            isSpeechActive,
+                        onStopReading = {
+                            stopReadingText()
+                        },
                     )
                 }
             }
         }
     }
-
 
 
     override fun onStart() {
@@ -714,7 +837,6 @@ class MainActivity : ComponentActivity() {
     }
 
 
-
     private fun moveGlassesCursor(
         deltaX: Float,
         deltaY: Float
@@ -743,6 +865,47 @@ class MainActivity : ComponentActivity() {
                 .currentPosition()
                 ?: return
 
+        /*
+ * OCR regions get first chance
+ * to handle the click.
+ */
+        val textRegion =
+            target
+                .ocrOverlayView
+                .findRegionAtPosition(
+                    x =
+                        position.x,
+
+                    y =
+                        position.y,
+
+                    coordinateView =
+                        target
+                            .cursorOverlayView
+                )
+
+        if (
+            textRegion != null
+        ) {
+
+            target
+                .ocrOverlayView
+                .selectRegion(
+                    textRegion.id
+                )
+
+            /*
+             * Interrupt whatever was
+             * previously being read.
+             */
+            speechController.stop()
+
+            speechController.speak(
+                textRegion.text
+            )
+
+            return
+        }
         val eventTime =
             SystemClock.uptimeMillis()
 

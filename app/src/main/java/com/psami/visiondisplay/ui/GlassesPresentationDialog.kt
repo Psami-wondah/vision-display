@@ -155,6 +155,9 @@ class GlassesPresentationDialog(
     private var edgeOverlayView:
             EdgeOverlayView? = null
 
+    private var ocrOverlayView:
+            OcrOverlayView? = null
+
     override fun onCreate(
         savedInstanceState: Bundle?
     ) {
@@ -219,6 +222,9 @@ class GlassesPresentationDialog(
 
         val overlayView =
             EdgeOverlayView(context)
+
+        val textOverlayView =
+            OcrOverlayView(context)
 
         val cursorOverlayView =
             CursorOverlayView(context)
@@ -322,6 +328,11 @@ class GlassesPresentationDialog(
             matchParentLayoutParams()
         )
 
+        cameraViewport.addView(
+            textOverlayView,
+            matchParentLayoutParams()
+        )
+
         /*
          * ROOT LAYERS
          *
@@ -359,6 +370,9 @@ class GlassesPresentationDialog(
         edgeOverlayView =
             overlayView
 
+        ocrOverlayView =
+            textOverlayView
+
         root.addOnLayoutChangeListener { _,
                                          _,
                                          _,
@@ -395,6 +409,9 @@ class GlassesPresentationDialog(
                     edgeOverlayView =
                         overlayView,
 
+                    ocrOverlayView =
+                        textOverlayView,
+
                     interactionLayer =
                         interactionLayer,
 
@@ -428,6 +445,7 @@ class GlassesPresentationDialog(
 
     override fun dismiss() {
         edgeOverlayView?.clear()
+        ocrOverlayView?.clear()
         super.dismiss()
     }
 
@@ -479,6 +497,11 @@ class GlassesPresentationDialog(
         edgeOverlayView
             ?.setFillCenter(
                 isCircle
+            )
+
+        ocrOverlayView
+            ?.setViewportShape(
+                currentState.viewportShape
             )
 
         viewport.invalidateOutline()

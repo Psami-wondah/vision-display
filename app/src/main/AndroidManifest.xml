@@ -27,7 +27,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:screenOrientation="sensorLandscape"
+            android:screenOrientation="fullSensor"
             android:theme="@style/Theme.VisionDisplay"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

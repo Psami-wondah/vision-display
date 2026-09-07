@@ -40,7 +40,12 @@ import android.view.OrientationEventListener
 class CameraXController(
     context: Context,
     private val onCameraDiagnosticsChanged: (String) -> Unit,
-    private val onCameraOptionsChanged: (List<CameraOption>) -> Unit
+    private val onCameraOptionsChanged: (List<CameraOption>) -> Unit,
+    private val onTextRecognized:
+        (OcrResult) -> Unit,
+
+    private val onTextRecognitionError:
+        (String) -> Unit
 ) : AutoCloseable {
 
     private data class LogicalCameraDetails(
@@ -97,9 +102,41 @@ class CameraXController(
     private var isClosed = false
 
 
+    private val textRecognitionProcessor =
+        TextRecognitionProcessor()
+
+    private val ocrRequested =
+        AtomicBoolean(false)
+
+    private val ocrInProgress =
+        AtomicBoolean(false)
 
 
 
+
+    fun requestTextRecognition():
+            Boolean {
+
+        if (
+            isClosed ||
+            !isBound ||
+            currentAnalysis == null
+        ) {
+            return false
+        }
+
+        /*
+         * We don't perform OCR here.
+         *
+         * We simply tell the existing analyzer
+         * to use the next available frame.
+         */
+        ocrRequested.set(
+            true
+        )
+
+        return true
+    }
 
     @OptIn(ExperimentalCamera2Interop::class)
     fun start(
@@ -184,7 +221,10 @@ class CameraXController(
                         )
                         .setResolutionStrategy(
                             ResolutionStrategy(
-                                Size(640, 360),
+                                Size(
+                                    1280,
+                                    720
+                                ),
                                 ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER
                             )
                         )
@@ -298,24 +338,41 @@ class CameraXController(
                         .also {
                             it.setAnalyzer(
                                 analysisExecutor,
-                                EdgeAnalyzer(
+                                VisionAnalyzer(
                                     overlayView =
                                         target.edgeOverlayView,
 
-                                    enabled =
+                                    edgeEnabled =
                                         this.edgeEnhancementEnabled,
+
+                                    ocrRequested =
+                                        ocrRequested,
+
+                                    ocrInProgress =
+                                        ocrInProgress,
+
+                                    textRecognitionProcessor =
+                                        textRecognitionProcessor,
 
                                     mainExecutor =
                                         mainExecutor,
 
-                                    onError = { message ->
+                                    onTextRecognized =
+                                        onTextRecognized,
+
+                                    onTextRecognitionError =
+                                        onTextRecognitionError,
+
+                                    onEdgeError = { message ->
 
                                         if (
                                             !isClosed &&
                                             requestedGeneration ==
                                             bindingGeneration
                                         ) {
-                                            onError(message)
+                                            onError(
+                                                message
+                                            )
                                         }
                                     }
                                 )
@@ -431,6 +488,7 @@ class CameraXController(
 
         }, mainExecutor)
     }
+
 
 
     private var currentDeviceRotation =
@@ -601,6 +659,9 @@ class CameraXController(
         currentTarget
             ?.edgeOverlayView
             ?.clear()
+        ocrRequested.set(
+            false
+        )
 
         currentTarget = null
         currentLifecycleOwner = null
@@ -626,7 +687,7 @@ class CameraXController(
         stop()
 
         isClosed = true
-
+        textRecognitionProcessor.close()
         analysisExecutor.shutdownNow()
     }
 
@@ -1451,144 +1512,287 @@ private fun Exception.diagnosticMessage(): String =
         ?: javaClass.simpleName
 
 
-private class EdgeAnalyzer(
-    private val overlayView: EdgeOverlayView,
-    private val enabled: AtomicBoolean,
+private class VisionAnalyzer(
+    private val overlayView:
+    EdgeOverlayView,
+
+    private val edgeEnabled:
+    AtomicBoolean,
+
+    private val ocrRequested:
+    AtomicBoolean,
+
+    private val ocrInProgress:
+    AtomicBoolean,
+
+    private val textRecognitionProcessor:
+    TextRecognitionProcessor,
+
     private val mainExecutor:
     java.util.concurrent.Executor,
-    private val onError: (String) -> Unit
+
+    private val onTextRecognized:
+        (OcrResult) -> Unit,
+
+    private val onTextRecognitionError:
+        (String) -> Unit,
+
+    private val onEdgeError:
+        (String) -> Unit
 ) : ImageAnalysis.Analyzer {
 
-    private var hasReportedFailure = false
+    private var hasReportedEdgeFailure =
+        false
 
     override fun analyze(
         image: ImageProxy
     ) {
-        if (!enabled.get()) {
+
+        val shouldProcessEdges =
+            edgeEnabled.get()
+
+        /*
+         * Consume exactly one pending
+         * OCR request.
+         */
+        var shouldProcessOcr =
+            ocrRequested
+                .compareAndSet(
+                    true,
+                    false
+                )
+
+        /*
+         * If an OCR task is already running,
+         * put the request back for a later
+         * frame rather than running two
+         * recognizers concurrently.
+         */
+        if (
+            shouldProcessOcr &&
+            !ocrInProgress
+                .compareAndSet(
+                    false,
+                    true
+                )
+        ) {
+            ocrRequested.set(
+                true
+            )
+
+            shouldProcessOcr =
+                false
+        }
+
+        if (
+            !shouldProcessEdges &&
+            !shouldProcessOcr
+        ) {
             image.close()
             return
         }
 
-        try {
-            val crop =
-                image.cropRect
-
-            val sampleStep =
-                ceil(
-                    crop.width() /
-                            MAX_OUTPUT_WIDTH.toFloat()
+        /*
+         * Edge processing is synchronous,
+         * so it can safely happen before
+         * ML Kit takes ownership of this
+         * frame.
+         */
+        if (
+            shouldProcessEdges
+        ) {
+            try {
+                processEdges(
+                    image
                 )
-                    .toInt()
-                    .coerceAtLeast(1)
-
-            val outputWidth =
-                (crop.width() / sampleStep)
-                    .coerceAtLeast(1)
-
-            val outputHeight =
-                (crop.height() / sampleStep)
-                    .coerceAtLeast(1)
-
-            val plane =
-                image.planes.first()
-
-            val buffer =
-                plane.buffer
-
-            val bufferStart =
-                buffer.position()
-
-            val luminance =
-                IntArray(
-                    outputWidth *
-                            outputHeight
-                )
-
-            for (
-            outputY in
-            0 until outputHeight
+            } catch (
+                exception: Exception
             ) {
-                val sourceY =
-                    crop.top +
-                            outputY *
-                            sampleStep
 
-                val rowOffset =
-                    sourceY *
-                            plane.rowStride
-
-                for (
-                outputX in
-                0 until outputWidth
+                if (
+                    !hasReportedEdgeFailure
                 ) {
-                    val sourceX =
-                        crop.left +
-                                outputX *
-                                sampleStep
+                    hasReportedEdgeFailure =
+                        true
 
-                    val sourceIndex =
-                        bufferStart +
-                                rowOffset +
-                                sourceX *
-                                plane.pixelStride
-
-                    luminance[
-                        outputY *
-                                outputWidth +
-                                outputX
-                    ] =
-                        buffer.get(
-                            sourceIndex
+                    mainExecutor.execute {
+                        onEdgeError(
+                            exception.message
+                                ?: "Edge enhancement failed"
                         )
-                            .toInt() and 0xFF
+                    }
                 }
             }
+        }
 
-            val edgePixels =
-                SobelEdgeDetector.detect(
-                    luminance,
-                    outputWidth,
-                    outputHeight
-                )
-
-            val unrotatedBitmap =
-                Bitmap.createBitmap(
-                    edgePixels,
-                    outputWidth,
-                    outputHeight,
-                    Bitmap.Config.ARGB_8888
-                )
-
-            val outputBitmap =
-                rotate(
-                    unrotatedBitmap,
-                    image.imageInfo
-                        .rotationDegrees
-                )
-
-            overlayView.submit(
-                outputBitmap
-            )
-
-        } catch (
-            exception: Exception
+        /*
+         * ML Kit is asynchronous.
+         *
+         * TextRecognitionProcessor will
+         * close the ImageProxy when the
+         * task finishes.
+         */
+        if (
+            shouldProcessOcr
         ) {
 
-            if (!hasReportedFailure) {
+            textRecognitionProcessor.process(
+                imageProxy =
+                    image,
 
-                hasReportedFailure = true
+                callbackExecutor =
+                    mainExecutor,
 
-                mainExecutor.execute {
-                    onError(
-                        exception.message
-                            ?: "Edge enhancement failed"
+                onResult = {
+                        text ->
+
+                    onTextRecognized(
+                        text
+                    )
+                },
+
+                onError = {
+                        message ->
+
+                    onTextRecognitionError(
+                        message
+                    )
+                },
+
+                onComplete = {
+                    ocrInProgress.set(
+                        false
                     )
                 }
-            }
+            )
 
-        } finally {
-            image.close()
+            return
         }
+
+        /*
+         * No asynchronous consumer owns
+         * this frame.
+         */
+        image.close()
+    }
+
+    private fun processEdges(
+        image: ImageProxy
+    ) {
+        val crop =
+            image.cropRect
+
+        val sampleStep =
+            ceil(
+                crop.width() /
+                        MAX_OUTPUT_WIDTH
+                            .toFloat()
+            )
+                .toInt()
+                .coerceAtLeast(
+                    1
+                )
+
+        val outputWidth =
+            (
+                    crop.width() /
+                            sampleStep
+                    )
+                .coerceAtLeast(
+                    1
+                )
+
+        val outputHeight =
+            (
+                    crop.height() /
+                            sampleStep
+                    )
+                .coerceAtLeast(
+                    1
+                )
+
+        val plane =
+            image.planes.first()
+
+        val buffer =
+            plane.buffer
+
+        val bufferStart =
+            buffer.position()
+
+        val luminance =
+            IntArray(
+                outputWidth *
+                        outputHeight
+            )
+
+        for (
+        outputY in
+        0 until outputHeight
+        ) {
+            val sourceY =
+                crop.top +
+                        outputY *
+                        sampleStep
+
+            val rowOffset =
+                sourceY *
+                        plane.rowStride
+
+            for (
+            outputX in
+            0 until outputWidth
+            ) {
+                val sourceX =
+                    crop.left +
+                            outputX *
+                            sampleStep
+
+                val sourceIndex =
+                    bufferStart +
+                            rowOffset +
+                            sourceX *
+                            plane.pixelStride
+
+                luminance[
+                    outputY *
+                            outputWidth +
+                            outputX
+                ] =
+                    buffer.get(
+                        sourceIndex
+                    )
+                        .toInt() and
+                            0xFF
+            }
+        }
+
+        val edgePixels =
+            SobelEdgeDetector.detect(
+                luminance,
+                outputWidth,
+                outputHeight
+            )
+
+        val unrotatedBitmap =
+            Bitmap.createBitmap(
+                edgePixels,
+                outputWidth,
+                outputHeight,
+                Bitmap.Config.ARGB_8888
+            )
+
+        val outputBitmap =
+            rotate(
+                unrotatedBitmap,
+                image
+                    .imageInfo
+                    .rotationDegrees
+            )
+
+        overlayView.submit(
+            outputBitmap
+        )
     }
 
     private fun rotate(
@@ -1596,14 +1800,17 @@ private class EdgeAnalyzer(
         rotationDegrees: Int
     ): Bitmap {
 
-        if (rotationDegrees == 0) {
+        if (
+            rotationDegrees == 0
+        ) {
             return bitmap
         }
 
         val matrix =
             Matrix().apply {
                 postRotate(
-                    rotationDegrees.toFloat()
+                    rotationDegrees
+                        .toFloat()
                 )
             }
 
@@ -1618,7 +1825,9 @@ private class EdgeAnalyzer(
                 true
             )
 
-        if (rotated !== bitmap) {
+        if (
+            rotated !== bitmap
+        ) {
             bitmap.recycle()
         }
 

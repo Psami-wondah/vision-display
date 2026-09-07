@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.material3.Button
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 
@@ -48,6 +49,14 @@ fun EyesFreeControlPanel(
     onViewportReset: () -> Unit,
     onOpenSettings: () -> Unit,
     leftHandedMode: Boolean,
+    isTextRecognitionInProgress:
+    Boolean,
+
+    onReadText:
+        () -> Unit,
+    isSpeechActive: Boolean,
+    onStopReading:
+        () -> Unit,
     modifier: Modifier = Modifier
 ) {
 
@@ -98,11 +107,52 @@ fun EyesFreeControlPanel(
                     Modifier.weight(1f)
             )
 
-            OutlinedButton(
-                onClick =
-                    onOpenSettings
+            Row(
+                horizontalArrangement =
+                    Arrangement.spacedBy(
+                        8.dp
+                    )
             ) {
-                Text("Settings")
+
+                Button(
+                    onClick = {
+
+                        if (
+                            isSpeechActive
+                        ) {
+                            onStopReading()
+                        } else {
+                            onReadText()
+                        }
+                    },
+
+                    enabled =
+                        isExternalDisplayConnected &&
+                                !isTextRecognitionInProgress
+                ) {
+
+                    Text(
+                        when {
+                            isTextRecognitionInProgress ->
+                                "READING…"
+
+                            isSpeechActive ->
+                                "STOP READING"
+
+                            else ->
+                                "READ TEXT"
+                        }
+                    )
+                }
+
+                OutlinedButton(
+                    onClick =
+                        onOpenSettings
+                ) {
+                    Text(
+                        "Settings"
+                    )
+                }
             }
         }
 
