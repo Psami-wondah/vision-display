@@ -42,7 +42,7 @@ class CameraXController(
     private val onCameraDiagnosticsChanged: (String) -> Unit,
     private val onCameraOptionsChanged: (List<CameraOption>) -> Unit,
     private val onTextRecognized:
-        (OcrResult) -> Unit,
+        (OcrCapture) -> Unit,
 
     private val onTextRecognitionError:
         (String) -> Unit
@@ -1532,7 +1532,7 @@ private class VisionAnalyzer(
     java.util.concurrent.Executor,
 
     private val onTextRecognized:
-        (OcrResult) -> Unit,
+        (OcrCapture) -> Unit,
 
     private val onTextRecognitionError:
         (String) -> Unit,
@@ -1636,6 +1636,31 @@ private class VisionAnalyzer(
             shouldProcessOcr
         ) {
 
+            val frozenFrame =
+                try {
+                    createFrozenFrame(
+                        image
+                    )
+                } catch (
+                    exception: Exception
+                ) {
+
+                    ocrInProgress.set(
+                        false
+                    )
+
+                    image.close()
+
+                    mainExecutor.execute {
+                        onTextRecognitionError(
+                            exception.message
+                                ?: "Unable to capture OCR frame"
+                        )
+                    }
+
+                    return
+                }
+
             textRecognitionProcessor.process(
                 imageProxy =
                     image,
@@ -1644,15 +1669,31 @@ private class VisionAnalyzer(
                     mainExecutor,
 
                 onResult = {
-                        text ->
+                        result ->
 
                     onTextRecognized(
-                        text
+                        OcrCapture(
+                            result =
+                                result,
+
+                            frozenFrame =
+                                frozenFrame
+                        )
                     )
                 },
 
                 onError = {
                         message ->
+
+                    /*
+                     * Nobody needs this bitmap
+                     * if OCR itself failed.
+                     */
+                    if (
+                        !frozenFrame.isRecycled
+                    ) {
+                        frozenFrame.recycle()
+                    }
 
                     onTextRecognitionError(
                         message
@@ -1832,6 +1873,20 @@ private class VisionAnalyzer(
         }
 
         return rotated
+    }
+
+    private fun createFrozenFrame(
+        image: ImageProxy
+    ): Bitmap {
+
+        val bitmap =
+            image.toBitmap()
+
+        return rotate(
+            bitmap,
+            image.imageInfo
+                .rotationDegrees
+        )
     }
 
     private companion object {

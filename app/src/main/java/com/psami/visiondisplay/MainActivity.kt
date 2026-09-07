@@ -59,6 +59,9 @@ class MainActivity : ComponentActivity() {
     private var isTextRecognitionInProgress by
     mutableStateOf(false)
 
+    private var isOcrInspectionActive by
+    mutableStateOf(false)
+
     private var isSpeechActive by
     mutableStateOf(false)
     /*
@@ -367,35 +370,79 @@ class MainActivity : ComponentActivity() {
                 }
             },
             onTextRecognized = {
-                    result ->
+                    capture ->
 
                 isTextRecognitionInProgress =
                     false
 
-                /*
-                 * Put the individual text regions
-                 * onto the glasses.
-                 */
-                renderTarget
-                    ?.ocrOverlayView
-                    ?.submit(
-                        result
-                    )
+                val result =
+                    capture.result
 
                 if (
                     result.fullText.isBlank()
                 ) {
+
+                    /*
+                     * No inspection mode is useful
+                     * if nothing was recognised.
+                     */
+                    if (
+                        !capture
+                            .frozenFrame
+                            .isRecycled
+                    ) {
+                        capture
+                            .frozenFrame
+                            .recycle()
+                    }
+
+                    isOcrInspectionActive =
+                        false
+
                     hapticController.reset()
 
                     speechController.speak(
                         "No text found"
                     )
-                } else {
-                    hapticController.confirm()
 
-                    speechController.speak(
-                        result.fullText
-                    )
+                } else {
+
+                    val presentation =
+                        glassesPresentation
+
+                    if (
+                        presentation == null
+                    ) {
+
+                        if (
+                            !capture
+                                .frozenFrame
+                                .isRecycled
+                        ) {
+                            capture
+                                .frozenFrame
+                                .recycle()
+                        }
+
+                        isOcrInspectionActive =
+                            false
+
+                    } else {
+
+                        presentation
+                            .showOcrInspection(
+                                capture
+                            )
+
+                        isOcrInspectionActive =
+                            true
+
+                        hapticController.confirm()
+
+                        speechController.speak(
+                            result.fullText
+                        )
+                    }
                 }
             },
 
@@ -559,6 +606,12 @@ class MainActivity : ComponentActivity() {
                         onStopReading = {
                             stopReadingText()
                         },
+                        isOcrInspectionActive =
+                            isOcrInspectionActive,
+
+                        onResumeCamera = {
+                            resumeLiveCamera()
+                        },
                     )
                 }
             }
@@ -603,6 +656,19 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean(KEY_PERMISSION_ATTEMPTED, permissionRequestAttempted)
         super.onSaveInstanceState(outState)
+    }
+
+    private fun resumeLiveCamera() {
+
+        speechController.stop()
+
+        glassesPresentation
+            ?.clearOcrInspection()
+
+        isOcrInspectionActive =
+            false
+
+        hapticController.click()
     }
 
     private fun synchronizePresentation() {
@@ -697,6 +763,12 @@ class MainActivity : ComponentActivity() {
         cameraController.refreshDiagnostics(
             selectedCameraId
         )
+        isOcrInspectionActive =
+            false
+
+        isTextRecognitionInProgress =
+            false
+        speechController.stop()
         updateScreenWakeState(
             false
         )

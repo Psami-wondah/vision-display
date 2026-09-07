@@ -1,4 +1,5 @@
 package com.psami.visiondisplay.ui
+import android.graphics.Bitmap
 
 import android.graphics.Rect
 
@@ -13,4 +14,9 @@ data class OcrResult(
     val regions: List<OcrTextRegion>,
     val sourceWidth: Int,
     val sourceHeight: Int
+)
+
+data class OcrCapture(
+    val result: OcrResult,
+    val frozenFrame: Bitmap
 )

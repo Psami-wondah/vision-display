@@ -30,6 +30,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.material3.Button
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import android.content.res.Configuration
+import androidx.compose.ui.platform.LocalConfiguration
 
 @Composable
 fun EyesFreeControlPanel(
@@ -51,14 +53,22 @@ fun EyesFreeControlPanel(
     leftHandedMode: Boolean,
     isTextRecognitionInProgress:
     Boolean,
-
+    isOcrInspectionActive: Boolean,
+    onResumeCamera: () -> Unit,
     onReadText:
         () -> Unit,
     isSpeechActive: Boolean,
     onStopReading:
         () -> Unit,
+
     modifier: Modifier = Modifier
 ) {
+    val configuration =
+        LocalConfiguration.current
+
+    val isLandscape =
+        configuration.orientation ==
+                Configuration.ORIENTATION_LANDSCAPE
 
 
 
@@ -78,81 +88,158 @@ fun EyesFreeControlPanel(
          * Most of the display is deliberately
          * reserved for the touchpads.
          */
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-
-            verticalAlignment =
-                Alignment.CenterVertically
+        if (
+            isLandscape
         ) {
 
-            Text(
-                text =
-                    if (
-                        isExternalDisplayConnected
-                    ) {
-                        "● Glasses connected"
-                    } else {
-                        "○ Waiting for glasses"
-                    },
-
-                style =
-                    MaterialTheme
-                        .typography
-                        .titleMedium,
-
-                modifier =
-                    Modifier.weight(1f)
-            )
-
             Row(
-                horizontalArrangement =
-                    Arrangement.spacedBy(
-                        8.dp
-                    )
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+
+                verticalAlignment =
+                    Alignment.CenterVertically
             ) {
 
-                Button(
-                    onClick = {
-
+                Text(
+                    text =
                         if (
-                            isSpeechActive
+                            isExternalDisplayConnected
                         ) {
-                            onStopReading()
+                            "● Glasses connected"
                         } else {
-                            onReadText()
-                        }
-                    },
+                            "○ Waiting for glasses"
+                        },
 
-                    enabled =
-                        isExternalDisplayConnected &&
-                                !isTextRecognitionInProgress
+                    style =
+                        MaterialTheme
+                            .typography
+                            .titleMedium,
+
+                    modifier =
+                        Modifier.weight(1f)
+                )
+
+                Row(
+                    horizontalArrangement =
+                        Arrangement.spacedBy(
+                            8.dp
+                        )
+                ) {
+
+                    OcrActionButton(
+                        isExternalDisplayConnected =
+                            isExternalDisplayConnected,
+
+                        isTextRecognitionInProgress =
+                            isTextRecognitionInProgress,
+
+                        isSpeechActive =
+                            isSpeechActive,
+
+                        isOcrInspectionActive =
+                            isOcrInspectionActive,
+
+                        onReadText =
+                            onReadText,
+
+                        onStopReading =
+                            onStopReading,
+
+                        onResumeCamera =
+                            onResumeCamera
+                    )
+
+                    OutlinedButton(
+                        onClick =
+                            onOpenSettings
+                    ) {
+                        Text(
+                            "Settings"
+                        )
+                    }
+                }
+            }
+
+        } else {
+
+            /*
+             * Portrait gives the OCR action
+             * its own row so the header
+             * doesn't become cramped.
+             */
+            Column(
+                modifier =
+                    Modifier.fillMaxWidth()
+            ) {
+
+                Row(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+
+                    verticalAlignment =
+                        Alignment.CenterVertically
                 ) {
 
                     Text(
-                        when {
-                            isTextRecognitionInProgress ->
-                                "READING…"
+                        text =
+                            if (
+                                isExternalDisplayConnected
+                            ) {
+                                "● Glasses connected"
+                            } else {
+                                "○ Waiting for glasses"
+                            },
 
-                            isSpeechActive ->
-                                "STOP READING"
+                        style =
+                            MaterialTheme
+                                .typography
+                                .titleMedium,
 
-                            else ->
-                                "READ TEXT"
-                        }
+                        modifier =
+                            Modifier.weight(1f)
                     )
+
+                    OutlinedButton(
+                        onClick =
+                            onOpenSettings
+                    ) {
+                        Text(
+                            "Settings"
+                        )
+                    }
                 }
 
-                OutlinedButton(
-                    onClick =
-                        onOpenSettings
-                ) {
-                    Text(
-                        "Settings"
-                    )
-                }
+                OcrActionButton(
+                    isExternalDisplayConnected =
+                        isExternalDisplayConnected,
+
+                    isTextRecognitionInProgress =
+                        isTextRecognitionInProgress,
+
+                    isSpeechActive =
+                        isSpeechActive,
+
+                    isOcrInspectionActive =
+                        isOcrInspectionActive,
+
+                    onReadText =
+                        onReadText,
+
+                    onStopReading =
+                        onStopReading,
+
+                    onResumeCamera =
+                        onResumeCamera,
+
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                )
             }
         }
 
@@ -167,81 +254,166 @@ fun EyesFreeControlPanel(
          *
          * This is intentional for muscle memory.
          */
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-
-            horizontalArrangement =
-                Arrangement.spacedBy(
-                    12.dp
-                )
+        if (
+            isLandscape
         ) {
 
-            if (
-                leftHandedMode
+            Row(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+
+                horizontalArrangement =
+                    Arrangement.spacedBy(
+                        12.dp
+                    )
             ) {
 
-                ViewportControlPad(
-                    onViewportPan =
-                        onViewportPan,
+                if (
+                    leftHandedMode
+                ) {
 
-                    onViewportScale =
-                        onViewportScale,
+                    ViewportControlPad(
+                        onViewportPan =
+                            onViewportPan,
 
-                    onViewportReset =
-                        onViewportReset,
+                        onViewportScale =
+                            onViewportScale,
 
-                    modifier =
-                        Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                )
+                        onViewportReset =
+                            onViewportReset,
 
-                PointerControlPad(
-                    onCursorMove =
-                        onCursorMove,
+                        modifier =
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                    )
 
-                    onCursorClick =
-                        onCursorClick,
+                    PointerControlPad(
+                        onCursorMove =
+                            onCursorMove,
 
-                    modifier =
-                        Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                )
+                        onCursorClick =
+                            onCursorClick,
 
-            } else {
+                        modifier =
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                    )
 
-                PointerControlPad(
-                    onCursorMove =
-                        onCursorMove,
+                } else {
 
-                    onCursorClick =
-                        onCursorClick,
+                    PointerControlPad(
+                        onCursorMove =
+                            onCursorMove,
 
-                    modifier =
-                        Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                )
+                        onCursorClick =
+                            onCursorClick,
 
-                ViewportControlPad(
-                    onViewportPan =
-                        onViewportPan,
+                        modifier =
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                    )
 
-                    onViewportScale =
-                        onViewportScale,
+                    ViewportControlPad(
+                        onViewportPan =
+                            onViewportPan,
 
-                    onViewportReset =
-                        onViewportReset,
+                        onViewportScale =
+                            onViewportScale,
 
-                    modifier =
-                        Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                )
+                        onViewportReset =
+                            onViewportReset,
+
+                        modifier =
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                    )
+                }
+            }
+
+        } else {
+
+            Column(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+
+                verticalArrangement =
+                    Arrangement.spacedBy(
+                        12.dp
+                    )
+            ) {
+
+                if (
+                    leftHandedMode
+                ) {
+
+                    ViewportControlPad(
+                        onViewportPan =
+                            onViewportPan,
+
+                        onViewportScale =
+                            onViewportScale,
+
+                        onViewportReset =
+                            onViewportReset,
+
+                        modifier =
+                            Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                    )
+
+                    PointerControlPad(
+                        onCursorMove =
+                            onCursorMove,
+
+                        onCursorClick =
+                            onCursorClick,
+
+                        modifier =
+                            Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                    )
+
+                } else {
+
+                    PointerControlPad(
+                        onCursorMove =
+                            onCursorMove,
+
+                        onCursorClick =
+                            onCursorClick,
+
+                        modifier =
+                            Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                    )
+
+                    ViewportControlPad(
+                        onViewportPan =
+                            onViewportPan,
+
+                        onViewportScale =
+                            onViewportScale,
+
+                        onViewportReset =
+                            onViewportReset,
+
+                        modifier =
+                            Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                    )
+                }
             }
         }
     }
@@ -536,5 +708,59 @@ private fun ViewportControlPad(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun OcrActionButton(
+    isExternalDisplayConnected: Boolean,
+    isTextRecognitionInProgress: Boolean,
+    isSpeechActive: Boolean,
+    isOcrInspectionActive: Boolean,
+    onReadText: () -> Unit,
+    onStopReading: () -> Unit,
+    onResumeCamera: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Button(
+        modifier =
+            modifier,
+
+        enabled =
+            !isTextRecognitionInProgress &&
+                    (
+                            isExternalDisplayConnected ||
+                                    isSpeechActive ||
+                                    isOcrInspectionActive
+                            ),
+
+        onClick = {
+            when {
+                isSpeechActive ->
+                    onStopReading()
+
+                isOcrInspectionActive ->
+                    onResumeCamera()
+
+                else ->
+                    onReadText()
+            }
+        }
+    ) {
+        Text(
+            when {
+                isTextRecognitionInProgress ->
+                    "READING…"
+
+                isSpeechActive ->
+                    "STOP READING"
+
+                isOcrInspectionActive ->
+                    "RESUME CAMERA"
+
+                else ->
+                    "READ TEXT"
+            }
+        )
     }
 }

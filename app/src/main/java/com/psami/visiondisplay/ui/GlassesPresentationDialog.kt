@@ -19,6 +19,8 @@ import androidx.core.view.doOnAttach
 import com.psami.visiondisplay.data.CalibrationState
 import com.psami.visiondisplay.data.ViewportShape
 import kotlin.math.roundToInt
+import android.graphics.Bitmap
+import android.widget.ImageView
 
 internal data class CalibrationLayout(
     val width: Int,
@@ -157,6 +159,12 @@ class GlassesPresentationDialog(
 
     private var ocrOverlayView:
             OcrOverlayView? = null
+
+    private var frozenFrameView:
+            ImageView? = null
+
+    private var currentFrozenBitmap:
+            Bitmap? = null
 
     override fun onCreate(
         savedInstanceState: Bundle?
@@ -315,6 +323,26 @@ class GlassesPresentationDialog(
             }
         )
 
+
+        val frozenImageView =
+            ImageView(context).apply {
+
+                visibility =
+                    View.GONE
+
+                scaleType =
+                    ImageView.ScaleType.FIT_CENTER
+
+                /*
+                 * Prevent the moving preview
+                 * underneath from appearing in
+                 * letterboxed areas.
+                 */
+                setBackgroundColor(
+                    Color.BLACK
+                )
+            }
+
         /*
          * CAMERA VIEWPORT
          */
@@ -327,6 +355,12 @@ class GlassesPresentationDialog(
             overlayView,
             matchParentLayoutParams()
         )
+
+        cameraViewport.addView(
+            frozenImageView,
+            matchParentLayoutParams()
+        )
+
 
         cameraViewport.addView(
             textOverlayView,
@@ -366,6 +400,9 @@ class GlassesPresentationDialog(
 
         previewView =
             preview
+
+        frozenFrameView =
+            frozenImageView
 
         edgeOverlayView =
             overlayView
@@ -444,8 +481,12 @@ class GlassesPresentationDialog(
     }
 
     override fun dismiss() {
-        edgeOverlayView?.clear()
-        ocrOverlayView?.clear()
+
+        edgeOverlayView
+            ?.clear()
+
+        clearOcrInspection()
+
         super.dismiss()
     }
 
@@ -503,6 +544,20 @@ class GlassesPresentationDialog(
             ?.setViewportShape(
                 currentState.viewportShape
             )
+
+        frozenFrameView
+            ?.scaleType =
+            if (
+                isCircle
+            ) {
+                ImageView
+                    .ScaleType
+                    .CENTER_CROP
+            } else {
+                ImageView
+                    .ScaleType
+                    .FIT_CENTER
+            }
 
         viewport.invalidateOutline()
     }
@@ -645,6 +700,70 @@ class GlassesPresentationDialog(
                 )
             }
         )
+    }
+
+    fun showOcrInspection(
+        capture: OcrCapture
+    ) {
+
+        /*
+         * Dispose any previous capture first.
+         */
+        clearOcrInspection()
+
+        currentFrozenBitmap =
+            capture.frozenFrame
+
+        frozenFrameView
+            ?.apply {
+
+                setImageBitmap(
+                    capture.frozenFrame
+                )
+
+                visibility =
+                    View.VISIBLE
+            }
+
+        ocrOverlayView
+            ?.submit(
+                capture.result
+            )
+    }
+
+    fun clearOcrInspection() {
+
+        /*
+         * Remove ImageView's reference
+         * before recycling the Bitmap.
+         */
+        frozenFrameView
+            ?.apply {
+
+                setImageDrawable(
+                    null
+                )
+
+                visibility =
+                    View.GONE
+            }
+
+        currentFrozenBitmap
+            ?.let {
+                    bitmap ->
+
+                if (
+                    !bitmap.isRecycled
+                ) {
+                    bitmap.recycle()
+                }
+            }
+
+        currentFrozenBitmap =
+            null
+
+        ocrOverlayView
+            ?.clear()
     }
 
     private fun matchParentLayoutParams() =
