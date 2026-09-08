@@ -27,8 +27,10 @@ import com.psami.visiondisplay.data.CalibrationStore
 import com.psami.visiondisplay.data.CameraOption
 import com.psami.visiondisplay.data.ControllerPreferences
 import com.psami.visiondisplay.data.ControllerPreferencesStore
+import com.psami.visiondisplay.data.KnownPerson
 import com.psami.visiondisplay.data.ViewportShape
 import com.psami.visiondisplay.ui.CameraXController
+import com.psami.visiondisplay.ui.FaceRecognitionRepository
 import com.psami.visiondisplay.ui.GlassesPresentationDialog
 import com.psami.visiondisplay.ui.GlassesRenderTarget
 import com.psami.visiondisplay.ui.HapticController
@@ -43,6 +45,17 @@ class MainActivity : ComponentActivity() {
     private lateinit var hapticController: HapticController
     private lateinit var speechController:
             SpeechController
+
+    private lateinit var faceRecognitionRepository:
+            FaceRecognitionRepository
+
+    private var knownPeople by
+    mutableStateOf<List<KnownPerson>>(
+        emptyList()
+    )
+
+    private var faceEnrollmentStatus by
+    mutableStateOf<String?>(null)
 
     private var glassesPresentation: GlassesPresentationDialog? = null
     private var renderTarget: GlassesRenderTarget? = null
@@ -477,7 +490,33 @@ class MainActivity : ComponentActivity() {
                     "FaceDetection",
                     message
                 )
-            }
+            },
+            faceRecognitionRepository =
+                faceRecognitionRepository,
+
+            onFaceEnrollmentStatus = {
+                    status ->
+
+                faceEnrollmentStatus =
+                    status
+            },
+
+            onFaceEnrollmentCompleted = {
+                    person ->
+
+                knownPeople =
+                    faceRecognitionRepository
+                        .listPeople()
+
+                faceEnrollmentStatus =
+                    "${person.name} enrolled"
+
+                hapticController.confirm()
+
+                speakFeedback(
+                    "${person.name} enrolled"
+                )
+            },
 
         )
 
@@ -558,6 +597,27 @@ class MainActivity : ComponentActivity() {
 
                             updateControllerPreferences(
                                 preferences
+                            )
+                        },
+                        knownPeople =
+                            knownPeople,
+
+                        faceEnrollmentStatus =
+                            faceEnrollmentStatus,
+
+                        onEnrollKnownPerson = {
+                                name ->
+
+                            enrollKnownPerson(
+                                name
+                            )
+                        },
+
+                        onDeleteKnownPerson = {
+                                id ->
+
+                            deleteKnownPerson(
+                                id
                             )
                         },
                     )
@@ -667,6 +727,8 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         dismissPresentation()
         cameraController.close()
+        faceRecognitionRepository
+            .close()
         speechController.close()
         super.onDestroy()
     }
@@ -687,6 +749,46 @@ class MainActivity : ComponentActivity() {
             false
 
         hapticController.click()
+    }
+
+    private fun enrollKnownPerson(
+        name: String
+    ) {
+
+        val accepted =
+            cameraController
+                .startFaceEnrollment(
+                    name
+                )
+
+        if (
+            !accepted
+        ) {
+            faceEnrollmentStatus =
+                "Camera is not ready for enrollment."
+
+            hapticController.reset()
+        } else {
+            hapticController.confirm()
+
+            speakFeedback(
+                "Face enrollment started"
+            )
+        }
+    }
+
+    private fun deleteKnownPerson(
+        id: String
+    ) {
+
+        faceRecognitionRepository
+            .delete(
+                id
+            )
+
+        knownPeople =
+            faceRecognitionRepository
+                .listPeople()
     }
 
     private fun synchronizePresentation() {

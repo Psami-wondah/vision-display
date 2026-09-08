@@ -56,6 +56,9 @@ dependencies {
     implementation(
         libs.google.mlkit.face.detection
     )
+    implementation(
+        libs.google.litert
+    )
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

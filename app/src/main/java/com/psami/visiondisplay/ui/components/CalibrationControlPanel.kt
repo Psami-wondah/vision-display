@@ -30,6 +30,12 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material3.Slider
 import com.psami.visiondisplay.data.ControllerPreferences
+import com.psami.visiondisplay.data.KnownPerson
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,8 +59,27 @@ fun CalibrationControlPanel(
 
     onControllerPreferencesChange:
         (ControllerPreferences) -> Unit,
+
+    knownPeople:
+    List<KnownPerson>,
+
+    faceEnrollmentStatus:
+    String?,
+
+    onEnrollKnownPerson:
+        (String) -> Unit,
+
+    onDeleteKnownPerson:
+        (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+
+    var newPersonName by
+    rememberSaveable {
+        mutableStateOf(
+            ""
+        )
+    }
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
@@ -261,6 +286,157 @@ fun CalibrationControlPanel(
                                     ControllerPreferences
                                         .MAX_VIEWPORT_SENSITIVITY
                     )
+                }
+            }
+
+            Card(
+                modifier =
+                    Modifier.fillMaxWidth()
+            ) {
+
+                Column(
+                    modifier =
+                        Modifier.padding(
+                            16.dp
+                        ),
+
+                    verticalArrangement =
+                        Arrangement.spacedBy(
+                            12.dp
+                        )
+                ) {
+
+                    Text(
+                        text =
+                            "Known people",
+
+                        style =
+                            MaterialTheme
+                                .typography
+                                .titleMedium
+                    )
+
+                    Text(
+                        text =
+                            "Face templates stay on this device.",
+                        style =
+                            MaterialTheme
+                                .typography
+                                .bodySmall
+                    )
+
+                    OutlinedTextField(
+                        value =
+                            newPersonName,
+
+                        onValueChange = {
+                            newPersonName =
+                                it
+                        },
+
+                        label = {
+                            Text(
+                                "Person name"
+                            )
+                        },
+
+                        singleLine =
+                            true,
+
+                        modifier =
+                            Modifier.fillMaxWidth()
+                    )
+
+                    Button(
+                        enabled =
+                            newPersonName
+                                .isNotBlank() &&
+                                    isExternalDisplayConnected,
+
+                        onClick = {
+
+                            onEnrollKnownPerson(
+                                newPersonName
+                                    .trim()
+                            )
+                        }
+                    ) {
+
+                        Text(
+                            "Enroll visible face"
+                        )
+                    }
+
+                    faceEnrollmentStatus
+                        ?.let {
+                                status ->
+
+                            Text(
+                                text =
+                                    status,
+
+                                style =
+                                    MaterialTheme
+                                        .typography
+                                        .bodySmall
+                            )
+                        }
+
+                    knownPeople.forEach {
+                            person ->
+
+                        Row(
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth(),
+
+                            horizontalArrangement =
+                                Arrangement
+                                    .SpaceBetween,
+
+                            verticalAlignment =
+                                Alignment
+                                    .CenterVertically
+                        ) {
+
+                            Text(
+                                text =
+                                    person.name,
+
+                                modifier =
+                                    Modifier.weight(
+                                        1f
+                                    )
+                            )
+
+                            OutlinedButton(
+                                onClick = {
+
+                                    onDeleteKnownPerson(
+                                        person.id
+                                    )
+                                }
+                            ) {
+
+                                Text(
+                                    "Delete"
+                                )
+                            }
+                        }
+                    }
+
+                    if (
+                        knownPeople.isEmpty()
+                    ) {
+                        Text(
+                            text =
+                                "No people enrolled yet.",
+                            style =
+                                MaterialTheme
+                                    .typography
+                                    .bodySmall
+                        )
+                    }
                 }
             }
             Card(modifier = Modifier.fillMaxWidth()) {

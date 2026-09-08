@@ -3,14 +3,21 @@ package com.psami.visiondisplay.ui
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import android.util.Size
+import android.view.OrientationEventListener
 import android.view.Surface
 import androidx.annotation.OptIn
 import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraFilter
 import androidx.camera.core.CameraInfo
@@ -25,18 +32,14 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.psami.visiondisplay.data.CameraOption
+import com.psami.visiondisplay.data.KnownPerson
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.atan
 import kotlin.math.ceil
-import android.hardware.camera2.CameraCaptureSession
-import android.hardware.camera2.CaptureRequest
-import android.hardware.camera2.TotalCaptureResult
-import android.hardware.camera2.CaptureResult
-import androidx.camera.camera2.interop.Camera2Interop
-import android.view.OrientationEventListener
+
 class CameraXController(
     context: Context,
     private val onCameraDiagnosticsChanged: (String) -> Unit,
@@ -48,7 +51,15 @@ class CameraXController(
     private val onFacesDetected:
         (FaceDetectionResult) -> Unit,
     private val onFaceDetectionError:
-        (String) -> Unit
+        (String) -> Unit,
+    private val faceRecognitionRepository:
+    FaceRecognitionRepository,
+
+    private val onFaceEnrollmentStatus:
+        (String) -> Unit,
+
+    private val onFaceEnrollmentCompleted:
+        (KnownPerson) -> Unit,
 ) : AutoCloseable {
 
     private data class LogicalCameraDetails(
@@ -129,6 +140,26 @@ class CameraXController(
         )
 
 
+    private val faceRecognitionExecutor =
+        Executors
+            .newSingleThreadExecutor()
+
+    private val enrollmentLock =
+        Any()
+
+    private var pendingEnrollmentName:
+            String? = null
+
+    private var enrollmentTrackingId:
+            Int? = null
+
+    private val enrollmentSamples =
+        mutableListOf<FloatArray>()
+
+    private var lastEnrollmentSampleTime =
+        0L
+
+
     fun requestTextRecognition():
             Boolean {
 
@@ -151,6 +182,340 @@ class CameraXController(
         )
 
         return true
+    }
+
+    fun startFaceEnrollment(
+        name: String
+    ): Boolean {
+
+        val cleanName =
+            name.trim()
+
+        if (
+            cleanName.isBlank() ||
+            !isBound ||
+            isClosed
+        ) {
+            return false
+        }
+
+        synchronized(
+            enrollmentLock
+        ) {
+
+            pendingEnrollmentName =
+                cleanName
+
+            enrollmentTrackingId =
+                null
+
+            enrollmentSamples
+                .clear()
+
+            lastEnrollmentSampleTime =
+                0L
+        }
+
+        onFaceEnrollmentStatus(
+            "Look at $cleanName and keep one face in view."
+        )
+
+        return true
+    }
+
+    private fun processFaceFrame(
+        capture: FaceFrameCapture,
+        generation: Int
+    ) {
+
+        faceRecognitionExecutor
+            .execute {
+
+                try {
+
+                    if (
+                        isClosed ||
+                        generation !=
+                        bindingGeneration
+                    ) {
+                        return@execute
+                    }
+
+                    val enrollmentName =
+                        synchronized(
+                            enrollmentLock
+                        ) {
+                            pendingEnrollmentName
+                        }
+
+                    val output =
+                        if (
+                            enrollmentName !=
+                            null
+                        ) {
+
+                            processEnrollmentFrame(
+                                name =
+                                    enrollmentName,
+
+                                frame =
+                                    capture.frame,
+
+                                result =
+                                    capture.result
+                            )
+
+                            capture.result
+
+                        } else {
+
+                            faceRecognitionRepository
+                                .recognize(
+                                    frame =
+                                        capture.frame,
+
+                                    result =
+                                        capture.result
+                                )
+                        }
+
+                    mainExecutor.execute {
+
+                        if (
+                            !isClosed &&
+                            generation ==
+                            bindingGeneration
+                        ) {
+                            onFacesDetected(
+                                output
+                            )
+                        }
+                    }
+
+                } catch (
+                    exception: Exception
+                ) {
+
+                    mainExecutor.execute {
+
+                        onFaceDetectionError(
+                            exception.message
+                                ?: "Face recognition failed"
+                        )
+                    }
+
+                } finally {
+
+                    if (
+                        !capture
+                            .frame
+                            .isRecycled
+                    ) {
+                        capture
+                            .frame
+                            .recycle()
+                    }
+
+                    faceDetectionInProgress
+                        .set(
+                            false
+                        )
+                }
+            }
+    }
+
+    private fun processEnrollmentFrame(
+        name: String,
+        frame: Bitmap,
+        result: FaceDetectionResult
+    ) {
+
+        if (
+            result.faces.size != 1
+        ) {
+
+            mainExecutor.execute {
+
+                onFaceEnrollmentStatus(
+                    "Keep exactly one face in view."
+                )
+            }
+
+            return
+        }
+
+        val face =
+            result.faces.first()
+
+        if (
+            kotlin.math.abs(
+                face.eulerX
+            ) > 25f ||
+            kotlin.math.abs(
+                face.eulerY
+            ) > 30f ||
+            kotlin.math.abs(
+                face.eulerZ
+            ) > 25f
+        ) {
+
+            mainExecutor.execute {
+
+                onFaceEnrollmentStatus(
+                    "Look more directly at the camera."
+                )
+            }
+
+            return
+        }
+
+        val now =
+            SystemClock
+                .elapsedRealtime()
+
+        synchronized(
+            enrollmentLock
+        ) {
+
+            if (
+                pendingEnrollmentName !=
+                name
+            ) {
+                return
+            }
+
+            /*
+             * Keep samples from the same tracked
+             * face where ML Kit provides an ID.
+             */
+            if (
+                enrollmentTrackingId != null &&
+                face.trackingId != null &&
+                enrollmentTrackingId !=
+                face.trackingId
+            ) {
+
+                enrollmentSamples
+                    .clear()
+
+                enrollmentTrackingId =
+                    face.trackingId
+
+                lastEnrollmentSampleTime =
+                    0L
+            }
+
+            if (
+                enrollmentTrackingId ==
+                null
+            ) {
+                enrollmentTrackingId =
+                    face.trackingId
+            }
+
+            /*
+             * Don't collect five practically
+             * identical adjacent frames.
+             */
+            if (
+                now -
+                lastEnrollmentSampleTime <
+                250L
+            ) {
+                return
+            }
+        }
+
+        val embedding =
+            faceRecognitionRepository
+                .createEmbedding(
+                    frame =
+                        frame,
+
+                    boundingBox =
+                        face.boundingBox
+                )
+
+        var completedPerson:
+                KnownPerson? = null
+
+        var currentCount =
+            0
+
+        synchronized(
+            enrollmentLock
+        ) {
+
+            if (
+                pendingEnrollmentName !=
+                name
+            ) {
+                return
+            }
+
+            enrollmentSamples.add(
+                embedding
+            )
+
+            lastEnrollmentSampleTime =
+                now
+
+            currentCount =
+                enrollmentSamples.size
+
+            if (
+                currentCount >=
+                ENROLLMENT_SAMPLE_COUNT
+            ) {
+
+                completedPerson =
+                    faceRecognitionRepository
+                        .enroll(
+                            name =
+                                name,
+
+                            samples =
+                                enrollmentSamples
+                                    .toList()
+                        )
+
+                pendingEnrollmentName =
+                    null
+
+                enrollmentTrackingId =
+                    null
+
+                enrollmentSamples
+                    .clear()
+
+                lastEnrollmentSampleTime =
+                    0L
+            }
+        }
+
+        val person =
+            completedPerson
+
+        mainExecutor.execute {
+
+            if (
+                person != null
+            ) {
+
+                onFaceEnrollmentCompleted(
+                    person
+                )
+
+            } else {
+
+                onFaceEnrollmentStatus(
+                    "Capturing $name: " +
+                            "$currentCount/" +
+                            "$ENROLLMENT_SAMPLE_COUNT. " +
+                            "Move slightly between samples."
+                )
+            }
+        }
     }
 
     @OptIn(ExperimentalCamera2Interop::class)
@@ -399,11 +764,19 @@ class CameraXController(
                                     faceDetectionProcessor =
                                         faceDetectionProcessor,
 
-                                    onFacesDetected =
-                                        onFacesDetected,
 
                                     onFaceDetectionError =
                                         onFaceDetectionError,
+                                    onFaceFrame = { capture ->
+
+                                        processFaceFrame(
+                                            capture =
+                                                capture,
+
+                                            generation =
+                                                requestedGeneration
+                                        )
+                                    },
                                 )
                             )
                         }
@@ -517,7 +890,6 @@ class CameraXController(
 
         }, mainExecutor)
     }
-
 
 
     private var currentDeviceRotation =
@@ -718,6 +1090,8 @@ class CameraXController(
         isClosed = true
         textRecognitionProcessor.close()
         faceDetectionProcessor.close()
+        faceRecognitionExecutor
+            .shutdownNow()
         analysisExecutor.shutdownNow()
     }
 
@@ -959,6 +1333,7 @@ class CameraXController(
             )
             .build()
     }
+
     @OptIn(
         markerClass = [
             ExperimentalCamera2Interop::class
@@ -1533,6 +1908,8 @@ class CameraXController(
     private companion object {
         const val TAG =
             "CameraXController"
+        const val ENROLLMENT_SAMPLE_COUNT =
+            5
     }
 }
 
@@ -1541,6 +1918,11 @@ private fun Exception.diagnosticMessage(): String =
         ?: message
         ?: javaClass.simpleName
 
+
+private data class FaceFrameCapture(
+    val result: FaceDetectionResult,
+    val frame: Bitmap
+)
 
 private class VisionAnalyzer(
     private val overlayView:
@@ -1579,8 +1961,8 @@ private class VisionAnalyzer(
     private val faceDetectionProcessor:
     FaceDetectionProcessor,
 
-    private val onFacesDetected:
-        (FaceDetectionResult) -> Unit,
+    private val onFaceFrame:
+        (FaceFrameCapture) -> Unit,
 
     private val onFaceDetectionError:
         (String) -> Unit,
@@ -1591,7 +1973,6 @@ private class VisionAnalyzer(
 
     private var faceFrameCounter =
         0
-
 
 
     override fun analyze(
@@ -1750,8 +2131,7 @@ private class VisionAnalyzer(
                 callbackExecutor =
                     mainExecutor,
 
-                onResult = {
-                        result ->
+                onResult = { result ->
 
                     onTextRecognized(
                         OcrCapture(
@@ -1764,8 +2144,7 @@ private class VisionAnalyzer(
                     )
                 },
 
-                onError = {
-                        message ->
+                onError = { message ->
 
                     /*
                      * Nobody needs this bitmap
@@ -1796,6 +2175,32 @@ private class VisionAnalyzer(
             shouldProcessFaces
         ) {
 
+            val faceFrame =
+                try {
+                    createFrozenFrame(
+                        image
+                    )
+                } catch (
+                    exception: Exception
+                ) {
+
+                    faceDetectionInProgress
+                        .set(
+                            false
+                        )
+
+                    image.close()
+
+                    mainExecutor.execute {
+                        onFaceDetectionError(
+                            exception.message
+                                ?: "Unable to capture face frame"
+                        )
+                    }
+
+                    return
+                }
+
             faceDetectionProcessor.process(
                 imageProxy =
                     image,
@@ -1803,29 +2208,45 @@ private class VisionAnalyzer(
                 callbackExecutor =
                     mainExecutor,
 
-                onResult = {
-                        result ->
+                onResult = { result ->
 
-                    onFacesDetected(
-                        result
+                    onFaceFrame(
+                        FaceFrameCapture(
+                            result =
+                                result,
+
+                            frame =
+                                faceFrame
+                        )
                     )
                 },
 
-                onError = {
-                        message ->
+                onError = { message ->
+
+                    if (
+                        !faceFrame
+                            .isRecycled
+                    ) {
+                        faceFrame.recycle()
+                    }
+
+                    faceDetectionInProgress
+                        .set(
+                            false
+                        )
 
                     onFaceDetectionError(
                         message
                     )
                 },
 
-                onComplete = {
-
-                    faceDetectionInProgress
-                        .set(
-                            false
-                        )
-                }
+                /*
+                 * Don't clear faceDetectionInProgress
+                 * here anymore.
+                 *
+                 * Recognition still has work to do.
+                 */
+                onComplete = {}
             )
 
             return

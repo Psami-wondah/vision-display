@@ -14,7 +14,13 @@ data class DetectedFaceRegion(
      */
     val eulerX: Float,
     val eulerY: Float,
-    val eulerZ: Float
+    val eulerZ: Float,
+
+    val recognizedName:
+    String? = null,
+
+    val similarity:
+    Float? = null
 )
 
 data class FaceDetectionResult(

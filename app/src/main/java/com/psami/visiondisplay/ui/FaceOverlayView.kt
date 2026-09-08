@@ -52,6 +52,36 @@ class FaceOverlayView(
             List<DetectedFaceRegion> =
         emptyList()
 
+    private val recognizedBoxPaint =
+        Paint(
+            Paint.ANTI_ALIAS_FLAG
+        ).apply {
+
+            color =
+                Color.GREEN
+
+            style =
+                Paint.Style.STROKE
+
+            strokeWidth =
+                6f * density
+        }
+
+    private val recognizedTextPaint =
+        Paint(
+            Paint.ANTI_ALIAS_FLAG
+        ).apply {
+
+            color =
+                Color.GREEN
+
+            textSize =
+                20f * density
+
+            style =
+                Paint.Style.FILL
+        }
+
     private var sourceWidth =
         0
 
@@ -188,35 +218,76 @@ class FaceOverlayView(
                         offsetY
                 )
 
+
+            val isRecognized =
+                face.recognizedName !=
+                        null
+
+            val boxPaintToUse =
+                if (
+                    isRecognized
+                ) {
+                    recognizedBoxPaint
+                } else {
+                    boxPaint
+                }
+
+            val textPaintToUse =
+                if (
+                    isRecognized
+                ) {
+                    recognizedTextPaint
+                } else {
+                    textPaint
+                }
+
             canvas.drawRect(
                 rect,
-                boxPaint
+                boxPaintToUse
             )
 
-            /*
-             * Tracking IDs are useful while
-             * developing Phase 4A.
-             *
-             * This does NOT mean identity.
-             */
             val label =
-                face.trackingId
-                    ?.let {
-                        "FACE #$it"
+                if (
+                    face.recognizedName !=
+                    null
+                ) {
+
+                    val similarity =
+                        face.similarity
+
+                    if (
+                        similarity != null
+                    ) {
+                        "${face.recognizedName} " +
+                                "%.2f".format(
+                                    similarity
+                                )
+                    } else {
+                        face.recognizedName
                     }
-                    ?: "FACE"
+
+                } else {
+
+                    face.trackingId
+                        ?.let {
+                            "FACE #$it"
+                        }
+                        ?: "FACE"
+                }
 
             canvas.drawText(
                 label,
                 rect.left,
                 (
                         rect.top -
-                                8f * density
+                                8f *
+                                density
                         )
                     .coerceAtLeast(
-                        20f * density
+                        20f *
+                                density
                     ),
-                textPaint
+                textPaintToUse
             )
         }
     }
