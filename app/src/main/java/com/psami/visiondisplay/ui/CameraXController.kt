@@ -43,8 +43,11 @@ class CameraXController(
     private val onCameraOptionsChanged: (List<CameraOption>) -> Unit,
     private val onTextRecognized:
         (OcrCapture) -> Unit,
-
     private val onTextRecognitionError:
+        (String) -> Unit,
+    private val onFacesDetected:
+        (FaceDetectionResult) -> Unit,
+    private val onFaceDetectionError:
         (String) -> Unit
 ) : AutoCloseable {
 
@@ -112,6 +115,18 @@ class CameraXController(
         AtomicBoolean(false)
 
 
+    private val faceDetectionProcessor =
+        FaceDetectionProcessor()
+
+    private val faceDetectionEnabled =
+        AtomicBoolean(
+            true
+        )
+
+    private val faceDetectionInProgress =
+        AtomicBoolean(
+            false
+        )
 
 
     fun requestTextRecognition():
@@ -374,7 +389,21 @@ class CameraXController(
                                                 message
                                             )
                                         }
-                                    }
+                                    },
+                                    faceDetectionEnabled =
+                                        faceDetectionEnabled,
+
+                                    faceDetectionInProgress =
+                                        faceDetectionInProgress,
+
+                                    faceDetectionProcessor =
+                                        faceDetectionProcessor,
+
+                                    onFacesDetected =
+                                        onFacesDetected,
+
+                                    onFaceDetectionError =
+                                        onFaceDetectionError,
                                 )
                             )
                         }
@@ -688,6 +717,7 @@ class CameraXController(
 
         isClosed = true
         textRecognitionProcessor.close()
+        faceDetectionProcessor.close()
         analysisExecutor.shutdownNow()
     }
 
@@ -1538,11 +1568,31 @@ private class VisionAnalyzer(
         (String) -> Unit,
 
     private val onEdgeError:
-        (String) -> Unit
+        (String) -> Unit,
+
+    private val faceDetectionEnabled:
+    AtomicBoolean,
+
+    private val faceDetectionInProgress:
+    AtomicBoolean,
+
+    private val faceDetectionProcessor:
+    FaceDetectionProcessor,
+
+    private val onFacesDetected:
+        (FaceDetectionResult) -> Unit,
+
+    private val onFaceDetectionError:
+        (String) -> Unit,
 ) : ImageAnalysis.Analyzer {
 
     private var hasReportedEdgeFailure =
         false
+
+    private var faceFrameCounter =
+        0
+
+
 
     override fun analyze(
         image: ImageProxy
@@ -1561,6 +1611,37 @@ private class VisionAnalyzer(
                     true,
                     false
                 )
+
+
+        faceFrameCounter =
+            (
+                    faceFrameCounter + 1
+                    ) %
+                    FACE_DETECTION_INTERVAL
+
+        var shouldProcessFaces =
+            false
+
+        /*
+         * OCR gets priority because it is a
+         * deliberate user action.
+         *
+         * We don't start two asynchronous ML Kit
+         * operations against the same ImageProxy.
+         */
+        if (
+            !shouldProcessOcr &&
+            faceDetectionEnabled.get() &&
+            faceFrameCounter == 0
+        ) {
+
+            shouldProcessFaces =
+                faceDetectionInProgress
+                    .compareAndSet(
+                        false,
+                        true
+                    )
+        }
 
         /*
          * If an OCR task is already running,
@@ -1586,7 +1667,8 @@ private class VisionAnalyzer(
 
         if (
             !shouldProcessEdges &&
-            !shouldProcessOcr
+            !shouldProcessOcr &&
+            !shouldProcessFaces
         ) {
             image.close()
             return
@@ -1704,6 +1786,45 @@ private class VisionAnalyzer(
                     ocrInProgress.set(
                         false
                     )
+                }
+            )
+
+            return
+        }
+
+        if (
+            shouldProcessFaces
+        ) {
+
+            faceDetectionProcessor.process(
+                imageProxy =
+                    image,
+
+                callbackExecutor =
+                    mainExecutor,
+
+                onResult = {
+                        result ->
+
+                    onFacesDetected(
+                        result
+                    )
+                },
+
+                onError = {
+                        message ->
+
+                    onFaceDetectionError(
+                        message
+                    )
+                },
+
+                onComplete = {
+
+                    faceDetectionInProgress
+                        .set(
+                            false
+                        )
                 }
             )
 
@@ -1892,5 +2013,7 @@ private class VisionAnalyzer(
     private companion object {
         const val MAX_OUTPUT_WIDTH =
             320
+        const val FACE_DETECTION_INTERVAL =
+            3
     }
 }

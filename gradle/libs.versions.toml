@@ -10,6 +10,7 @@ kotlin = "2.2.10"
 composeBom = "2026.02.01"
 cameraX = "1.6.1"
 mlKitTextRecognition = "16.0.1"
+mlKitFaceDetection = "16.1.7"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -31,6 +32,8 @@ androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", 
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "cameraX" }
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "cameraX" }
 google-mlkit-text-recognition = { group = "com.google.mlkit", name = "text-recognition", version.ref = "mlKitTextRecognition" }
+google-mlkit-face-detection = { group = "com.google.mlkit", name = "face-detection", version.ref = "mlKitFaceDetection" }
+
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

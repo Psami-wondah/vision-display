@@ -166,6 +166,9 @@ class GlassesPresentationDialog(
     private var currentFrozenBitmap:
             Bitmap? = null
 
+    private var faceOverlayView:
+            FaceOverlayView? = null
+
     override fun onCreate(
         savedInstanceState: Bundle?
     ) {
@@ -230,6 +233,9 @@ class GlassesPresentationDialog(
 
         val overlayView =
             EdgeOverlayView(context)
+
+        val facesOverlayView =
+            FaceOverlayView(context)
 
         val textOverlayView =
             OcrOverlayView(context)
@@ -357,6 +363,11 @@ class GlassesPresentationDialog(
         )
 
         cameraViewport.addView(
+            facesOverlayView,
+            matchParentLayoutParams()
+        )
+
+        cameraViewport.addView(
             frozenImageView,
             matchParentLayoutParams()
         )
@@ -407,6 +418,9 @@ class GlassesPresentationDialog(
         edgeOverlayView =
             overlayView
 
+        faceOverlayView =
+            facesOverlayView
+
         ocrOverlayView =
             textOverlayView
 
@@ -446,6 +460,9 @@ class GlassesPresentationDialog(
                     edgeOverlayView =
                         overlayView,
 
+                    faceOverlayView =
+                        facesOverlayView,
+
                     ocrOverlayView =
                         textOverlayView,
 
@@ -483,6 +500,9 @@ class GlassesPresentationDialog(
     override fun dismiss() {
 
         edgeOverlayView
+            ?.clear()
+
+        faceOverlayView
             ?.clear()
 
         clearOcrInspection()
@@ -538,6 +558,11 @@ class GlassesPresentationDialog(
         edgeOverlayView
             ?.setFillCenter(
                 isCircle
+            )
+
+        faceOverlayView
+            ?.setViewportShape(
+                currentState.viewportShape
             )
 
         ocrOverlayView

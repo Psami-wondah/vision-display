@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.Settings
+import android.util.Log
 import android.view.Display
 import android.view.MotionEvent
 import android.view.WindowManager
@@ -458,6 +459,23 @@ class MainActivity : ComponentActivity() {
 
                 speechController.speak(
                     "Unable to read text"
+                )
+            },onFacesDetected = {
+                    result ->
+
+                renderTarget
+                    ?.faceOverlayView
+                    ?.submit(
+                        result
+                    )
+            },
+
+            onFaceDetectionError = {
+                    message ->
+
+                Log.w(
+                    "FaceDetection",
+                    message
                 )
             }
 
