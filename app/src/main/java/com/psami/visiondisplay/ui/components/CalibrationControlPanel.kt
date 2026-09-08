@@ -66,20 +66,18 @@ fun CalibrationControlPanel(
     faceEnrollmentStatus:
     String?,
 
-    onEnrollKnownPerson:
-        (String) -> Unit,
+    onRenameKnownPerson:
+        (
+        personId: String,
+        newName: String
+    ) -> Unit,
 
     onDeleteKnownPerson:
         (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
 
-    var newPersonName by
-    rememberSaveable {
-        mutableStateOf(
-            ""
-        )
-    }
+
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
@@ -318,54 +316,16 @@ fun CalibrationControlPanel(
 
                     Text(
                         text =
-                            "Face templates stay on this device.",
+                            "Tag an unknown face using " +
+                                    "the glasses cursor, then " +
+                                    "give it a name here.",
+
                         style =
                             MaterialTheme
                                 .typography
                                 .bodySmall
                     )
 
-                    OutlinedTextField(
-                        value =
-                            newPersonName,
-
-                        onValueChange = {
-                            newPersonName =
-                                it
-                        },
-
-                        label = {
-                            Text(
-                                "Person name"
-                            )
-                        },
-
-                        singleLine =
-                            true,
-
-                        modifier =
-                            Modifier.fillMaxWidth()
-                    )
-
-                    Button(
-                        enabled =
-                            newPersonName
-                                .isNotBlank() &&
-                                    isExternalDisplayConnected,
-
-                        onClick = {
-
-                            onEnrollKnownPerson(
-                                newPersonName
-                                    .trim()
-                            )
-                        }
-                    ) {
-
-                        Text(
-                            "Enroll visible face"
-                        )
-                    }
 
                     faceEnrollmentStatus
                         ?.let {
@@ -381,48 +341,19 @@ fun CalibrationControlPanel(
                                         .bodySmall
                             )
                         }
-
                     knownPeople.forEach {
                             person ->
 
-                        Row(
-                            modifier =
-                                Modifier
-                                    .fillMaxWidth(),
+                        KnownPersonEditor(
+                            person =
+                                person,
 
-                            horizontalArrangement =
-                                Arrangement
-                                    .SpaceBetween,
+                            onRename =
+                                onRenameKnownPerson,
 
-                            verticalAlignment =
-                                Alignment
-                                    .CenterVertically
-                        ) {
-
-                            Text(
-                                text =
-                                    person.name,
-
-                                modifier =
-                                    Modifier.weight(
-                                        1f
-                                    )
-                            )
-
-                            OutlinedButton(
-                                onClick = {
-
-                                    onDeleteKnownPerson(
-                                        person.id
-                                    )
-                                }
-                            ) {
-
-                                Text(
-                                    "Delete"
-                                )
-                            }
-                        }
+                            onDelete =
+                                onDeleteKnownPerson
+                        )
                     }
 
                     if (
@@ -695,6 +626,106 @@ fun CalibrationControlPanel(
                         }
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun KnownPersonEditor(
+    person: KnownPerson,
+
+    onRename:
+        (
+        personId: String,
+        newName: String
+    ) -> Unit,
+
+    onDelete:
+        (String) -> Unit
+) {
+
+    var name by
+    rememberSaveable(
+        person.id
+    ) {
+        mutableStateOf(
+            person.name
+        )
+    }
+
+    Column(
+        modifier =
+            Modifier.fillMaxWidth(),
+
+        verticalArrangement =
+            Arrangement.spacedBy(
+                8.dp
+            )
+    ) {
+
+        OutlinedTextField(
+            value =
+                name,
+
+            onValueChange = {
+                name =
+                    it
+            },
+
+            label = {
+                Text(
+                    "Name"
+                )
+            },
+
+            singleLine =
+                true,
+
+            modifier =
+                Modifier.fillMaxWidth()
+        )
+
+        Row(
+            horizontalArrangement =
+                Arrangement.spacedBy(
+                    8.dp
+                )
+        ) {
+
+            Button(
+                enabled =
+                    name.trim()
+                        .isNotBlank() &&
+                            name.trim() !=
+                            person.name,
+
+                onClick = {
+
+                    onRename(
+                        person.id,
+                        name.trim()
+                    )
+                }
+            ) {
+
+                Text(
+                    "Save name"
+                )
+            }
+
+            OutlinedButton(
+                onClick = {
+
+                    onDelete(
+                        person.id
+                    )
+                }
+            ) {
+
+                Text(
+                    "Delete"
+                )
             }
         }
     }

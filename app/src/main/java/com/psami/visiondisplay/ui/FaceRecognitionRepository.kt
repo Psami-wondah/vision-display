@@ -395,6 +395,90 @@ class FaceRecognitionRepository(
         embedder.close()
     }
 
+    @Synchronized
+    fun nextTaggedName():
+            String {
+
+        var index =
+            1
+
+        while (
+            people.any {
+                it.name.equals(
+                    "Tagged person $index",
+                    ignoreCase = true
+                )
+            }
+        ) {
+            index++
+        }
+
+        return "Tagged person $index"
+    }
+
+    @Synchronized
+    fun rename(
+        personId: String,
+        newName: String
+    ): KnownPerson? {
+
+        val cleanName =
+            newName.trim()
+
+        if (
+            cleanName.isBlank()
+        ) {
+            return null
+        }
+
+        /*
+         * Don't allow two different
+         * people with the same label.
+         */
+        if (
+            people.any {
+                it.id != personId &&
+                        it.name.equals(
+                            cleanName,
+                            ignoreCase = true
+                        )
+            }
+        ) {
+            return null
+        }
+
+        val existing =
+            people.firstOrNull {
+                it.id ==
+                        personId
+            }
+                ?: return null
+
+        val updated =
+            existing.copy(
+                name =
+                    cleanName
+            )
+
+        people =
+            people.map {
+                if (
+                    it.id ==
+                    personId
+                ) {
+                    updated
+                } else {
+                    it
+                }
+            }
+
+        store.save(
+            people
+        )
+
+        return updated
+    }
+
     companion object {
 
         /*

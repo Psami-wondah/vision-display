@@ -60,6 +60,8 @@ class CameraXController(
 
     private val onFaceEnrollmentCompleted:
         (KnownPerson) -> Unit,
+    private val onFaceEnrollmentCancelled:
+        (String) -> Unit,
 ) : AutoCloseable {
 
     private data class LogicalCameraDetails(
@@ -159,6 +161,8 @@ class CameraXController(
     private var lastEnrollmentSampleTime =
         0L
 
+    private var lastEnrollmentTargetSeenTime =
+        0L
 
     fun requestTextRecognition():
             Boolean {
@@ -185,39 +189,44 @@ class CameraXController(
     }
 
     fun startFaceEnrollment(
-        name: String
+        trackingId: Int
     ): Boolean {
 
-        val cleanName =
-            name.trim()
-
         if (
-            cleanName.isBlank() ||
             !isBound ||
             isClosed
         ) {
             return false
         }
 
+        val temporaryName =
+            faceRecognitionRepository
+                .nextTaggedName()
+
         synchronized(
             enrollmentLock
         ) {
 
             pendingEnrollmentName =
-                cleanName
+                temporaryName
 
             enrollmentTrackingId =
-                null
+                trackingId
 
             enrollmentSamples
                 .clear()
 
             lastEnrollmentSampleTime =
                 0L
+
+            lastEnrollmentTargetSeenTime =
+                SystemClock
+                    .elapsedRealtime()
         }
 
         onFaceEnrollmentStatus(
-            "Look at $cleanName and keep one face in view."
+            "Capturing $temporaryName: " +
+                    "0/$ENROLLMENT_SAMPLE_COUNT"
         )
 
         return true
@@ -241,23 +250,22 @@ class CameraXController(
                         return@execute
                     }
 
-                    val enrollmentName =
+                    val isEnrollmentActive =
                         synchronized(
                             enrollmentLock
                         ) {
-                            pendingEnrollmentName
+                            pendingEnrollmentName !=
+                                    null &&
+                                    enrollmentTrackingId !=
+                                    null
                         }
 
                     val output =
                         if (
-                            enrollmentName !=
-                            null
+                            isEnrollmentActive
                         ) {
 
                             processEnrollmentFrame(
-                                name =
-                                    enrollmentName,
-
                                 frame =
                                     capture.frame,
 
@@ -325,53 +333,102 @@ class CameraXController(
     }
 
     private fun processEnrollmentFrame(
-        name: String,
         frame: Bitmap,
         result: FaceDetectionResult
     ) {
 
-        if (
-            result.faces.size != 1
-        ) {
-
-            mainExecutor.execute {
-
-                onFaceEnrollmentStatus(
-                    "Keep exactly one face in view."
-                )
-            }
-
-            return
-        }
-
-        val face =
-            result.faces.first()
-
-        if (
-            kotlin.math.abs(
-                face.eulerX
-            ) > 25f ||
-            kotlin.math.abs(
-                face.eulerY
-            ) > 30f ||
-            kotlin.math.abs(
-                face.eulerZ
-            ) > 25f
-        ) {
-
-            mainExecutor.execute {
-
-                onFaceEnrollmentStatus(
-                    "Look more directly at the camera."
-                )
-            }
-
-            return
-        }
-
         val now =
             SystemClock
                 .elapsedRealtime()
+
+        val enrollmentState =
+            synchronized(
+                enrollmentLock
+            ) {
+
+                val name =
+                    pendingEnrollmentName
+
+                val trackingId =
+                    enrollmentTrackingId
+
+                if (
+                    name == null ||
+                    trackingId == null
+                ) {
+                    return
+                }
+
+                Pair(
+                    name,
+                    trackingId
+                )
+            }
+
+        val name =
+            enrollmentState.first
+
+        val targetTrackingId =
+            enrollmentState.second
+
+        /*
+         * Only the face explicitly selected
+         * by the cursor is allowed to
+         * contribute enrollment samples.
+         */
+        val face =
+            result.faces
+                .firstOrNull {
+                    it.trackingId ==
+                            targetTrackingId
+                }
+
+        if (
+            face == null
+        ) {
+
+            val shouldCancel =
+                synchronized(
+                    enrollmentLock
+                ) {
+
+                    pendingEnrollmentName ==
+                            name &&
+                            enrollmentTrackingId ==
+                            targetTrackingId &&
+                            now -
+                            lastEnrollmentTargetSeenTime >=
+                            FACE_LOST_TIMEOUT_MS
+                }
+
+            if (
+                shouldCancel
+            ) {
+
+                synchronized(
+                    enrollmentLock
+                ) {
+
+                    if (
+                        pendingEnrollmentName ==
+                        name &&
+                        enrollmentTrackingId ==
+                        targetTrackingId
+                    ) {
+                        clearEnrollmentStateLocked()
+                    }
+                }
+
+                mainExecutor.execute {
+
+                    onFaceEnrollmentCancelled(
+                        "Face lost. Tag the face again."
+                    )
+                }
+            }
+
+            return
+        }
 
         synchronized(
             enrollmentLock
@@ -379,48 +436,52 @@ class CameraXController(
 
             if (
                 pendingEnrollmentName !=
-                name
+                name ||
+                enrollmentTrackingId !=
+                targetTrackingId
             ) {
                 return
             }
 
-            /*
-             * Keep samples from the same tracked
-             * face where ML Kit provides an ID.
-             */
-            if (
-                enrollmentTrackingId != null &&
-                face.trackingId != null &&
-                enrollmentTrackingId !=
-                face.trackingId
-            ) {
+            lastEnrollmentTargetSeenTime =
+                now
+        }
 
-                enrollmentSamples
-                    .clear()
+        /*
+         * Don't store extremely angled
+         * samples in the person's template.
+         */
+        if (
+            kotlin.math.abs(
+                face.eulerX
+            ) > 30f ||
+            kotlin.math.abs(
+                face.eulerY
+            ) > 35f ||
+            kotlin.math.abs(
+                face.eulerZ
+            ) > 30f
+        ) {
 
-                enrollmentTrackingId =
-                    face.trackingId
+            mainExecutor.execute {
 
-                lastEnrollmentSampleTime =
-                    0L
+                onFaceEnrollmentStatus(
+                    "Keep the tagged face " +
+                            "looking towards the camera."
+                )
             }
 
-            if (
-                enrollmentTrackingId ==
-                null
-            ) {
-                enrollmentTrackingId =
-                    face.trackingId
-            }
+            return
+        }
 
-            /*
-             * Don't collect five practically
-             * identical adjacent frames.
-             */
+        synchronized(
+            enrollmentLock
+        ) {
+
             if (
                 now -
                 lastEnrollmentSampleTime <
-                250L
+                ENROLLMENT_SAMPLE_INTERVAL_MS
             ) {
                 return
             }
@@ -448,7 +509,9 @@ class CameraXController(
 
             if (
                 pendingEnrollmentName !=
-                name
+                name ||
+                enrollmentTrackingId !=
+                targetTrackingId
             ) {
                 return
             }
@@ -479,17 +542,7 @@ class CameraXController(
                                     .toList()
                         )
 
-                pendingEnrollmentName =
-                    null
-
-                enrollmentTrackingId =
-                    null
-
-                enrollmentSamples
-                    .clear()
-
-                lastEnrollmentSampleTime =
-                    0L
+                clearEnrollmentStateLocked()
             }
         }
 
@@ -511,11 +564,28 @@ class CameraXController(
                 onFaceEnrollmentStatus(
                     "Capturing $name: " +
                             "$currentCount/" +
-                            "$ENROLLMENT_SAMPLE_COUNT. " +
-                            "Move slightly between samples."
+                            "$ENROLLMENT_SAMPLE_COUNT"
                 )
             }
         }
+    }
+
+    private fun clearEnrollmentStateLocked() {
+
+        pendingEnrollmentName =
+            null
+
+        enrollmentTrackingId =
+            null
+
+        enrollmentSamples
+            .clear()
+
+        lastEnrollmentSampleTime =
+            0L
+
+        lastEnrollmentTargetSeenTime =
+            0L
     }
 
     @OptIn(ExperimentalCamera2Interop::class)
@@ -1910,6 +1980,11 @@ class CameraXController(
             "CameraXController"
         const val ENROLLMENT_SAMPLE_COUNT =
             5
+        const val ENROLLMENT_SAMPLE_INTERVAL_MS =
+            300L
+
+        const val FACE_LOST_TIMEOUT_MS =
+            1800L
     }
 }
 

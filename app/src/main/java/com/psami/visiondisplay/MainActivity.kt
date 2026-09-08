@@ -362,6 +362,14 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             )
+        faceRecognitionRepository =
+            FaceRecognitionRepository(
+                applicationContext
+            )
+
+        knownPeople =
+            faceRecognitionRepository
+                .listPeople()
         cameraController = CameraXController(
             context = applicationContext,
             onCameraDiagnosticsChanged = { diagnostics ->
@@ -504,17 +512,43 @@ class MainActivity : ComponentActivity() {
             onFaceEnrollmentCompleted = {
                     person ->
 
+                renderTarget
+                    ?.faceOverlayView
+                    ?.setEnrollmentTargetTrackingId(
+                        null
+                    )
+
                 knownPeople =
                     faceRecognitionRepository
                         .listPeople()
 
                 faceEnrollmentStatus =
-                    "${person.name} enrolled"
+                    "${person.name} saved. " +
+                            "Rename it in settings."
 
                 hapticController.confirm()
 
                 speakFeedback(
-                    "${person.name} enrolled"
+                    "Face tagged. " +
+                            "You can name it in settings."
+                )
+            },
+            onFaceEnrollmentCancelled = {
+                    message ->
+
+                renderTarget
+                    ?.faceOverlayView
+                    ?.setEnrollmentTargetTrackingId(
+                        null
+                    )
+
+                faceEnrollmentStatus =
+                    message
+
+                hapticController.reset()
+
+                speakFeedback(
+                    message
                 )
             },
 
@@ -605,10 +639,12 @@ class MainActivity : ComponentActivity() {
                         faceEnrollmentStatus =
                             faceEnrollmentStatus,
 
-                        onEnrollKnownPerson = {
+                        onRenameKnownPerson = {
+                                personId,
                                 name ->
 
-                            enrollKnownPerson(
+                            renameKnownPerson(
+                                personId,
                                 name
                             )
                         },
@@ -751,30 +787,41 @@ class MainActivity : ComponentActivity() {
         hapticController.click()
     }
 
-    private fun enrollKnownPerson(
+    private fun renameKnownPerson(
+        id: String,
         name: String
     ) {
 
-        val accepted =
-            cameraController
-                .startFaceEnrollment(
-                    name
+        val renamed =
+            faceRecognitionRepository
+                .rename(
+                    personId =
+                        id,
+
+                    newName =
+                        name
                 )
 
         if (
-            !accepted
+            renamed == null
         ) {
+
             faceEnrollmentStatus =
-                "Camera is not ready for enrollment."
+                "Unable to save that name."
 
             hapticController.reset()
-        } else {
-            hapticController.confirm()
 
-            speakFeedback(
-                "Face enrollment started"
-            )
+            return
         }
+
+        knownPeople =
+            faceRecognitionRepository
+                .listPeople()
+
+        faceEnrollmentStatus =
+            "${renamed.name} saved"
+
+        hapticController.confirm()
     }
 
     private fun deleteKnownPerson(
@@ -1098,6 +1145,118 @@ class MainActivity : ComponentActivity() {
 
             return
         }
+
+        /*
+ * During OCR inspection the frozen
+ * image covers the live face feed, so
+ * don't allow invisible live faces
+ * underneath it to be selected.
+ */
+        if (
+            !isOcrInspectionActive
+        ) {
+
+            val face =
+                target
+                    .faceOverlayView
+                    .findFaceAtPosition(
+                        x =
+                            position.x,
+
+                        y =
+                            position.y,
+
+                        coordinateView =
+                            target
+                                .cursorOverlayView
+                    )
+
+            if (
+                face != null
+            ) {
+
+                /*
+                 * A recognised face doesn't need
+                 * to be enrolled again.
+                 *
+                 * Clicking it simply tells the
+                 * user who it is.
+                 */
+                val recognizedName =
+                    face.recognizedName
+
+                if (
+                    recognizedName != null
+                ) {
+
+                    speechController.stop()
+
+                    speechController.speak(
+                        recognizedName
+                    )
+
+                    return
+                }
+
+                val trackingId =
+                    face.trackingId
+
+                if (
+                    trackingId == null
+                ) {
+
+                    hapticController.reset()
+
+                    speakFeedback(
+                        "Face is not stable yet. " +
+                                "Try again."
+                    )
+
+                    return
+                }
+
+                val accepted =
+                    cameraController
+                        .startFaceEnrollment(
+                            trackingId
+                        )
+
+                if (
+                    accepted
+                ) {
+
+                    target
+                        .faceOverlayView
+                        .setEnrollmentTargetTrackingId(
+                            trackingId
+                        )
+
+                    faceEnrollmentStatus =
+                        "Capturing tagged face…"
+
+                    speakFeedback(
+                        "Face tagged. " +
+                                "Keep the person in view."
+                    )
+
+                } else {
+
+                    hapticController.reset()
+
+                    speakFeedback(
+                        "Unable to tag face."
+                    )
+                }
+
+                return
+            }
+        }
+
+
+
+
+
+
         val eventTime =
             SystemClock.uptimeMillis()
 

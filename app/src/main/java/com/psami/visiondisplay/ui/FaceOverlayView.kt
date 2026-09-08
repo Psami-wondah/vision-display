@@ -15,72 +15,59 @@ class FaceOverlayView(
     context: Context
 ) : View(context) {
 
+    private data class MappedFace(
+        val face: DetectedFaceRegion,
+        val rect: RectF
+    )
+
     private val density =
-        resources
-            .displayMetrics
-            .density
+        resources.displayMetrics.density
 
     private val boxPaint =
-        Paint(
-            Paint.ANTI_ALIAS_FLAG
-        ).apply {
-            color =
-                Color.CYAN
-
-            style =
-                Paint.Style.STROKE
-
-            strokeWidth =
-                4f * density
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.CYAN
+            style = Paint.Style.STROKE
+            strokeWidth = 4f * density
         }
 
     private val textPaint =
-        Paint(
-            Paint.ANTI_ALIAS_FLAG
-        ).apply {
-            color =
-                Color.CYAN
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.CYAN
+            textSize = 18f * density
+            style = Paint.Style.FILL
+        }
 
-            textSize =
-                18f * density
+    private val recognizedBoxPaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.GREEN
+            style = Paint.Style.STROKE
+            strokeWidth = 6f * density
+        }
 
-            style =
-                Paint.Style.FILL
+    private val recognizedTextPaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.GREEN
+            textSize = 20f * density
+            style = Paint.Style.FILL
+        }
+
+    private val taggingBoxPaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.YELLOW
+            style = Paint.Style.STROKE
+            strokeWidth = 7f * density
+        }
+
+    private val taggingTextPaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.YELLOW
+            textSize = 20f * density
+            style = Paint.Style.FILL
         }
 
     private var faces:
             List<DetectedFaceRegion> =
         emptyList()
-
-    private val recognizedBoxPaint =
-        Paint(
-            Paint.ANTI_ALIAS_FLAG
-        ).apply {
-
-            color =
-                Color.GREEN
-
-            style =
-                Paint.Style.STROKE
-
-            strokeWidth =
-                6f * density
-        }
-
-    private val recognizedTextPaint =
-        Paint(
-            Paint.ANTI_ALIAS_FLAG
-        ).apply {
-
-            color =
-                Color.GREEN
-
-            textSize =
-                20f * density
-
-            style =
-                Paint.Style.FILL
-        }
 
     private var sourceWidth =
         0
@@ -90,6 +77,9 @@ class FaceOverlayView(
 
     private var viewportShape =
         ViewportShape.WIDE_ELLIPSE
+
+    private var enrollmentTargetTrackingId:
+            Int? = null
 
     init {
         importantForAccessibility =
@@ -112,7 +102,6 @@ class FaceOverlayView(
     }
 
     fun clear() {
-
         faces =
             emptyList()
 
@@ -121,6 +110,9 @@ class FaceOverlayView(
 
         sourceHeight =
             0
+
+        enrollmentTargetTrackingId =
+            null
 
         invalidate()
     }
@@ -140,12 +132,188 @@ class FaceOverlayView(
         invalidate()
     }
 
+    fun setEnrollmentTargetTrackingId(
+        trackingId: Int?
+    ) {
+        enrollmentTargetTrackingId =
+            trackingId
+
+        invalidate()
+    }
+
+    fun findFaceAtPosition(
+        x: Float,
+        y: Float,
+        coordinateView: View
+    ): DetectedFaceRegion? {
+
+        if (
+            width <= 0 ||
+            height <= 0
+        ) {
+            return null
+        }
+
+        val coordinateLocation =
+            IntArray(2)
+
+        val overlayLocation =
+            IntArray(2)
+
+        coordinateView.getLocationInWindow(
+            coordinateLocation
+        )
+
+        getLocationInWindow(
+            overlayLocation
+        )
+
+        val localX =
+            coordinateLocation[0] +
+                    x -
+                    overlayLocation[0]
+
+        val localY =
+            coordinateLocation[1] +
+                    y -
+                    overlayLocation[1]
+
+        if (
+            localX < 0f ||
+            localY < 0f ||
+            localX > width ||
+            localY > height
+        ) {
+            return null
+        }
+
+        if (
+            !pointIsInsideViewportShape(
+                localX,
+                localY
+            )
+        ) {
+            return null
+        }
+
+        /*
+         * If boxes overlap, prefer
+         * the smallest face box.
+         */
+        return mappedFaces()
+            .filter {
+                it.rect.contains(
+                    localX,
+                    localY
+                )
+            }
+            .minByOrNull {
+                it.rect.width() *
+                        it.rect.height()
+            }
+            ?.face
+    }
+
     override fun onDraw(
         canvas: Canvas
     ) {
-        super.onDraw(
-            canvas
-        )
+        super.onDraw(canvas)
+
+        mappedFaces()
+            .forEach {
+                    mapped ->
+
+                val face =
+                    mapped.face
+
+                val rect =
+                    mapped.rect
+
+                val isTagging =
+                    face.trackingId != null &&
+                            face.trackingId ==
+                            enrollmentTargetTrackingId
+
+                val isRecognized =
+                    face.recognizedName !=
+                            null
+
+                val boxPaintToUse =
+                    when {
+                        isTagging ->
+                            taggingBoxPaint
+
+                        isRecognized ->
+                            recognizedBoxPaint
+
+                        else ->
+                            boxPaint
+                    }
+
+                val textPaintToUse =
+                    when {
+                        isTagging ->
+                            taggingTextPaint
+
+                        isRecognized ->
+                            recognizedTextPaint
+
+                        else ->
+                            textPaint
+                    }
+
+                canvas.drawRect(
+                    rect,
+                    boxPaintToUse
+                )
+
+                val label =
+                    when {
+                        isTagging ->
+                            "TAGGING…"
+
+                        face.recognizedName !=
+                                null -> {
+
+                            val similarity =
+                                face.similarity
+
+                            if (
+                                similarity != null
+                            ) {
+                                "${face.recognizedName} " +
+                                        "%.2f".format(
+                                            similarity
+                                        )
+                            } else {
+                                face.recognizedName
+                            }
+                        }
+
+                        else ->
+                            face.trackingId
+                                ?.let {
+                                    "FACE #$it"
+                                }
+                                ?: "FACE"
+                    }
+
+                canvas.drawText(
+                    label,
+                    rect.left,
+                    (
+                            rect.top -
+                                    8f * density
+                            ).coerceAtLeast(
+                            20f * density
+                        ),
+                    textPaintToUse
+                )
+            }
+    }
+
+    private fun mappedFaces():
+            List<MappedFace> {
 
         if (
             width <= 0 ||
@@ -153,7 +321,7 @@ class FaceOverlayView(
             sourceWidth <= 0 ||
             sourceHeight <= 0
         ) {
-            return
+            return emptyList()
         }
 
         val horizontalScale =
@@ -200,96 +368,76 @@ class FaceOverlayView(
                             renderedHeight
                     ) / 2f
 
-        faces.forEach {
+        return faces.map {
                 face ->
 
-            val rect =
-                mapRect(
-                    source =
-                        face.boundingBox,
+            MappedFace(
+                face =
+                    face,
 
-                    scale =
-                        scale,
+                rect =
+                    mapRect(
+                        source =
+                            face.boundingBox,
 
-                    offsetX =
-                        offsetX,
+                        scale =
+                            scale,
 
-                    offsetY =
-                        offsetY
-                )
+                        offsetX =
+                            offsetX,
 
-
-            val isRecognized =
-                face.recognizedName !=
-                        null
-
-            val boxPaintToUse =
-                if (
-                    isRecognized
-                ) {
-                    recognizedBoxPaint
-                } else {
-                    boxPaint
-                }
-
-            val textPaintToUse =
-                if (
-                    isRecognized
-                ) {
-                    recognizedTextPaint
-                } else {
-                    textPaint
-                }
-
-            canvas.drawRect(
-                rect,
-                boxPaintToUse
-            )
-
-            val label =
-                if (
-                    face.recognizedName !=
-                    null
-                ) {
-
-                    val similarity =
-                        face.similarity
-
-                    if (
-                        similarity != null
-                    ) {
-                        "${face.recognizedName} " +
-                                "%.2f".format(
-                                    similarity
-                                )
-                    } else {
-                        face.recognizedName
-                    }
-
-                } else {
-
-                    face.trackingId
-                        ?.let {
-                            "FACE #$it"
-                        }
-                        ?: "FACE"
-                }
-
-            canvas.drawText(
-                label,
-                rect.left,
-                (
-                        rect.top -
-                                8f *
-                                density
-                        )
-                    .coerceAtLeast(
-                        20f *
-                                density
-                    ),
-                textPaintToUse
+                        offsetY =
+                            offsetY
+                    )
             )
         }
+    }
+
+    private fun pointIsInsideViewportShape(
+        x: Float,
+        y: Float
+    ): Boolean {
+
+        if (
+            viewportShape ==
+            ViewportShape.RECTANGLE
+        ) {
+            return true
+        }
+
+        val radiusX =
+            width / 2f
+
+        val radiusY =
+            height / 2f
+
+        if (
+            radiusX <= 0f ||
+            radiusY <= 0f
+        ) {
+            return false
+        }
+
+        val normalisedX =
+            (
+                    x -
+                            radiusX
+                    ) /
+                    radiusX
+
+        val normalisedY =
+            (
+                    y -
+                            radiusY
+                    ) /
+                    radiusY
+
+        return (
+                normalisedX *
+                        normalisedX +
+                        normalisedY *
+                        normalisedY
+                ) <= 1f
     }
 
     private fun mapRect(
